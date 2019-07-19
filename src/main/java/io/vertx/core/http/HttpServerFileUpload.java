@@ -15,6 +15,7 @@ import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.file.AsyncFile;
 import io.vertx.core.streams.ReadStream;
 
 /**
@@ -39,6 +40,9 @@ public interface HttpServerFileUpload extends ReadStream<Buffer> {
 
   @Override
   HttpServerFileUpload resume();
+
+  @Override
+  HttpServerFileUpload fetch(long amount);
 
   /**
    * Stream the content of this upload to the given file on storage.
@@ -82,7 +86,12 @@ public interface HttpServerFileUpload extends ReadStream<Buffer> {
   long size();
 
   /**
-   * @return true if the size of the upload can be retrieved via {@link #size()}.
+   * @return {@code true} if the size of the upload can be retrieved via {@link #size()}.
    */
   boolean isSizeAvailable();
+
+  /**
+   * @return the async uploaded file when {@link #streamToFileSystem} has been used
+   */
+  AsyncFile file();
 }

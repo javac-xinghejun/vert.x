@@ -12,26 +12,28 @@
 package io.vertx.core.http.impl;
 
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpConnection;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-interface HttpClientConnection extends HttpConnection {
+public interface HttpClientConnection extends HttpConnection {
 
   Channel channel();
 
-  void reportBytesWritten(long numberOfBytes);
+  ChannelHandlerContext channelHandlerContext();
 
-  void reportBytesRead(long s);
+  Future<Void> close();
 
-  void close();
+  void createStream(ContextInternal context, Handler<AsyncResult<HttpClientStream>> handler);
 
-  void createStream(HttpClientRequestImpl req, Handler<AsyncResult<HttpClientStream>> handler);
+  ContextInternal getContext();
 
-  ContextImpl getContext();
+  Object metric();
 
 }

@@ -24,42 +24,49 @@ import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.spi.metrics.HttpServerMetrics;
 
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayDeque;
 
+import static io.vertx.core.spi.metrics.Metrics.METRICS_ENABLED;
+
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-public class Http2ServerConnection extends Http2ConnectionBase {
+public class Http2ServerConnection extends Http2ConnectionBase implements HttpServerConnection {
 
   private final HttpServerOptions options;
   private final String serverOrigin;
-  private final Handler<HttpServerRequest> requestHandler;
   private final HttpServerMetrics metrics;
 
+  private Handler<HttpServerRequest> requestHandler;
   private Long maxConcurrentStreams;
   private int concurrentStreams;
   private final ArrayDeque<Push> pendingPushes = new ArrayDeque<>(8);
 
   Http2ServerConnection(
-      ContextImpl context,
+    ContextInternal context,
       String serverOrigin,
       VertxHttp2ConnectionHandler connHandler,
       HttpServerOptions options,
-      Handler<HttpServerRequest> requestHandler,
       HttpServerMetrics metrics) {
     super(context, connHandler);
 
     this.options = options;
     this.serverOrigin = serverOrigin;
-    this.requestHandler = requestHandler;
     this.metrics = metrics;
+  }
+
+  @Override
+  public HttpServerConnection handler(Handler<HttpServerRequest> handler) {
+    requestHandler = handler;
+    return this;
   }
 
   public HttpServerMetrics metrics() {
@@ -94,19 +101,30 @@ public class Http2ServerConnection extends Http2ConnectionBase {
     return false;
   }
 
+  private Http2ServerRequestImpl createRequest(int streamId, Http2Headers headers, boolean streamEnded) {
+    Http2Stream stream = handler.connection().stream(streamId);
+    String contentEncoding = options.isCompressionSupported() ? HttpUtils.determineContentEncoding(headers) : null;
+    boolean writable = handler.encoder().flowController().isWritable(stream);
+    return new Http2ServerRequestImpl(this, context.duplicate(), stream, metrics, serverOrigin, headers, contentEncoding, writable, streamEnded);
+  }
+
   @Override
   public synchronized void onHeadersRead(ChannelHandlerContext ctx, int streamId,
-                            Http2Headers headers, int padding, boolean endOfStream) {
+                            Http2Headers headers, int streamDependency, short weight, boolean exclusive, int padding, boolean endOfStream) {
     VertxHttp2Stream stream = streams.get(streamId);
     if (stream == null) {
       if (isMalformedRequest(headers)) {
         handler.writeReset(streamId, Http2Error.PROTOCOL_ERROR.code());
         return;
       }
-      String contentEncoding = options.isCompressionSupported() ? HttpUtils.determineContentEncoding(headers) : null;
-      Http2Stream s = handler.connection().stream(streamId);
-      boolean writable = handler.encoder().flowController().isWritable(s);
-      Http2ServerRequestImpl req = new Http2ServerRequestImpl(this, s, metrics, serverOrigin, headers, contentEncoding, writable);
+      Http2ServerRequestImpl req = createRequest(streamId, headers, endOfStream);
+      req.registerMetrics();
+      req.priority(new StreamPriority()
+        .setDependency(streamDependency)
+        .setWeight(weight)
+        .setExclusive(exclusive)
+      );
+
       stream = req;
       CharSequence value = headers.get(HttpHeaderNames.EXPECT);
       if (options.isHandle100ContinueAutomatically() &&
@@ -115,21 +133,20 @@ public class Http2ServerConnection extends Http2ConnectionBase {
         req.response().writeContinue();
       }
       streams.put(streamId, req);
-      context.executeFromIO(() -> {
-        Http2ServerResponseImpl resp = req.response();
-        resp.beginRequest();
-        requestHandler.handle(req);
-        boolean hasPush = resp.endRequest();
-        if (hasPush) {
-          ctx.flush();
-        }
-      });
+      req.dispatch(requestHandler);
     } else {
       // Http server request trailer - not implemented yet (in api)
     }
     if (endOfStream) {
-      context.executeFromIO(stream::onEnd);
+      VertxHttp2Stream finalStream = stream;
+      finalStream.context.dispatch(v -> finalStream.onEnd());
     }
+  }
+
+  @Override
+  public synchronized void onHeadersRead(ChannelHandlerContext ctx, int streamId,
+                            Http2Headers headers, int padding, boolean endOfStream) {
+    onHeadersRead(ctx, streamId, headers, 0, Http2CodecUtil.DEFAULT_PRIORITY_WEIGHT, false, padding, endOfStream);
   }
 
   @Override
@@ -141,7 +158,7 @@ public class Http2ServerConnection extends Http2ConnectionBase {
     super.onSettingsRead(ctx, settings);
   }
 
-  synchronized void sendPush(int streamId, String host, HttpMethod method, MultiMap headers, String path, Handler<AsyncResult<HttpServerResponse>> completionHandler) {
+  synchronized void sendPush(int streamId, String host, HttpMethod method, MultiMap headers, String path, StreamPriority streamPriority, Handler<AsyncResult<HttpServerResponse>> completionHandler) {
     Http2Headers headers_ = new DefaultHttp2Headers();
     if (method == HttpMethod.OTHER) {
       throw new IllegalArgumentException("Cannot push HttpMethod.OTHER");
@@ -165,19 +182,18 @@ public class Http2ServerConnection extends Http2ConnectionBase {
             String contentEncoding = HttpUtils.determineContentEncoding(headers_);
             Http2Stream promisedStream = handler.connection().stream(promisedStreamId);
             boolean writable = handler.encoder().flowController().isWritable(promisedStream);
-            Push push = new Push(promisedStream, contentEncoding, method, path, writable, completionHandler);
+            Push push = new Push(promisedStream, context, contentEncoding, method, path, writable, completionHandler);
+            push.priority(streamPriority);
             streams.put(promisedStreamId, push);
             if (maxConcurrentStreams == null || concurrentStreams < maxConcurrentStreams) {
               concurrentStreams++;
-              context.executeFromIO(push::complete);
+              context.dispatch(v -> push.complete());
             } else {
               pendingPushes.add(push);
             }
           }
         } else {
-          context.executeFromIO(() -> {
-            completionHandler.handle(Future.failedFuture(ar.cause()));
-          });
+          context.dispatch(Future.failedFuture(ar.cause()), completionHandler);
         }
       }
     });
@@ -188,25 +204,21 @@ public class Http2ServerConnection extends Http2ConnectionBase {
     super.updateSettings(settingsUpdate, completionHandler);
   }
 
-  private class Push extends VertxHttp2Stream<Http2ServerConnection> {
+  private class Push extends Http2ServerStream {
 
-    private final HttpMethod method;
-    private final String uri;
-    private final String contentEncoding;
-    private Http2ServerResponseImpl response;
-    private final Future<HttpServerResponse> completionHandler;
+    private final Promise<HttpServerResponse> completionHandler;
 
     public Push(Http2Stream stream,
+                ContextInternal context,
                 String contentEncoding,
                 HttpMethod method,
                 String uri,
                 boolean writable,
                 Handler<AsyncResult<HttpServerResponse>> completionHandler) {
-      super(Http2ServerConnection.this, stream, writable);
-      this.method = method;
-      this.uri = uri;
-      this.contentEncoding = contentEncoding;
-      this.completionHandler = Future.<HttpServerResponse>future().setHandler(completionHandler);
+      super(Http2ServerConnection.this, context, stream, contentEncoding, method, uri, writable);
+      Promise<HttpServerResponse> promise = Promise.promise();
+      promise.future().setHandler(ar -> context.dispatch(ar, completionHandler));
+      this.completionHandler = promise;
     }
 
     @Override
@@ -218,30 +230,33 @@ public class Http2ServerConnection extends Http2ConnectionBase {
     }
 
     @Override
+    void handlePriorityChange(StreamPriority streamPriority) {
+    }
+
+    @Override
     void handleInterestedOpsChanged() {
       if (response != null) {
-        response.writabilityChanged();
+        context.dispatch(v -> response.writabilityChanged());
       }
     }
 
     @Override
     void handleReset(long errorCode) {
-      if (response != null) {
-        response.callReset(errorCode);
-      } else {
-        completionHandler.fail(new StreamResetException(errorCode));
+      if (!completionHandler.tryFail(new StreamResetException(errorCode))) {
+        response.handleReset(errorCode);
       }
     }
 
     @Override
     void handleException(Throwable cause) {
       if (response != null) {
-        response.handleError(cause);
+        response.handleException(cause);
       }
     }
 
     @Override
     void handleClose() {
+      super.handleClose();
       if (pendingPushes.remove(this)) {
         completionHandler.fail("Push reset by client");
       } else {
@@ -258,10 +273,8 @@ public class Http2ServerConnection extends Http2ConnectionBase {
     }
 
     void complete() {
-      synchronized (Http2ServerConnection.this) {
-        response = new Http2ServerResponseImpl(Http2ServerConnection.this, this, method, uri, true, contentEncoding);
-        completionHandler.complete(response);
-      }
+      registerMetrics();
+      completionHandler.complete(response);
     }
   }
 }

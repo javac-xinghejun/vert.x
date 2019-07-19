@@ -11,10 +11,9 @@
 
 package io.vertx.core.net.impl.transport;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.ServerChannel;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollChannelOption;
 import io.netty.channel.epoll.EpollDatagramChannel;
@@ -26,6 +25,10 @@ import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.InternetProtocolFamily;
 import io.netty.channel.unix.DomainSocketAddress;
+import io.vertx.core.datagram.DatagramSocketOptions;
+import io.vertx.core.net.ClientOptionsBase;
+import io.vertx.core.net.NetServerOptions;
+import io.vertx.core.net.impl.SocketAddressImpl;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -35,6 +38,29 @@ import java.util.concurrent.ThreadFactory;
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
 class EpollTransport extends Transport {
+
+  private static volatile int pendingFastOpenRequestsThreshold = 256;
+
+  /**
+   * Return the number of of pending TFO connections in SYN-RCVD state for TCP_FASTOPEN.
+   *
+   * {@see #setPendingFastOpenRequestsThreshold}
+   */
+  public static int getPendingFastOpenRequestsThreshold() {
+    return pendingFastOpenRequestsThreshold;
+  }
+
+  /**
+   * Set the number of of pending TFO connections in SYN-RCVD state for TCP_FASTOPEN
+   * <p/>
+   * If this value goes over a certain limit the server disables all TFO connections.
+   */
+  public static void setPendingFastOpenRequestsThreshold(int value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("Invalid " + value);
+    }
+    pendingFastOpenRequestsThreshold = value;
+  }
 
   EpollTransport() {
   }
@@ -53,6 +79,14 @@ class EpollTransport extends Transport {
   }
 
   @Override
+  public io.vertx.core.net.SocketAddress convert(SocketAddress address) {
+    if (address instanceof DomainSocketAddress) {
+      return new SocketAddressImpl(((DomainSocketAddress) address).path());
+    }
+    return super.convert(address);
+  }
+
+  @Override
   public boolean isAvailable() {
     return Epoll.isAvailable();
   }
@@ -63,7 +97,7 @@ class EpollTransport extends Transport {
   }
 
   @Override
-  public EventLoopGroup eventLoopGroup(int nThreads, ThreadFactory threadFactory, int ioRatio) {
+  public EventLoopGroup eventLoopGroup(int type, int nThreads, ThreadFactory threadFactory, int ioRatio) {
     EpollEventLoopGroup eventLoopGroup = new EpollEventLoopGroup(nThreads, threadFactory);
     eventLoopGroup.setIoRatio(ioRatio);
     return eventLoopGroup;
@@ -80,34 +114,47 @@ class EpollTransport extends Transport {
   }
 
   @Override
-  public Class<? extends Channel> channelType(boolean domain) {
-    if (domain) {
-      return EpollDomainSocketChannel.class;
+  public ChannelFactory<? extends Channel> channelFactory(boolean domainSocket) {
+    if (domainSocket) {
+      return EpollDomainSocketChannel::new;
     } else {
-      return EpollSocketChannel.class;
+      return EpollSocketChannel::new;
     }
   }
 
-  public Class<? extends ServerChannel> serverChannelType(boolean domain) {
-    if (domain) {
-      return EpollServerDomainSocketChannel.class;
+  public ChannelFactory<? extends ServerChannel> serverChannelFactory(boolean domainSocket) {
+    if (domainSocket) {
+      return EpollServerDomainSocketChannel::new;
     }
-    return EpollServerSocketChannel.class;
+    return EpollServerSocketChannel::new;
   }
 
   @Override
-  public ChannelOption<?> channelOption(String name) {
-    switch (name) {
-      case "SO_REUSEPORT":
-        return EpollChannelOption.SO_REUSEPORT;
-      case "TCP_QUICKACK":
-        return EpollChannelOption.TCP_QUICKACK;
-      case "TCP_CORK":
-        return EpollChannelOption.TCP_CORK;
-      case "TCP_FASTOPEN":
-        return EpollChannelOption.TCP_FASTOPEN;
-      default:
-        return null;
+  public void configure(DatagramChannel channel, DatagramSocketOptions options) {
+    channel.config().setOption(EpollChannelOption.SO_REUSEPORT, options.isReusePort());
+    super.configure(channel, options);
+  }
+
+  @Override
+  public void configure(NetServerOptions options, boolean domainSocket, ServerBootstrap bootstrap) {
+    if (!domainSocket) {
+      bootstrap.option(EpollChannelOption.SO_REUSEPORT, options.isReusePort());
     }
+    if (options.isTcpFastOpen()) {
+      bootstrap.option(EpollChannelOption.TCP_FASTOPEN, options.isTcpFastOpen() ? pendingFastOpenRequestsThreshold : 0);
+    }
+    bootstrap.childOption(EpollChannelOption.TCP_QUICKACK, options.isTcpQuickAck());
+    bootstrap.childOption(EpollChannelOption.TCP_CORK, options.isTcpCork());
+    super.configure(options, domainSocket, bootstrap);
+  }
+
+  @Override
+  public void configure(ClientOptionsBase options, boolean domainSocket, Bootstrap bootstrap) {
+    if (options.isTcpFastOpen()) {
+      bootstrap.option(EpollChannelOption.TCP_FASTOPEN_CONNECT, options.isTcpFastOpen());
+    }
+    bootstrap.option(EpollChannelOption.TCP_QUICKACK, options.isTcpQuickAck());
+    bootstrap.option(EpollChannelOption.TCP_CORK, options.isTcpCork());
+    super.configure(options, domainSocket, bootstrap);
   }
 }

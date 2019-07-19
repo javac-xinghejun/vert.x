@@ -50,7 +50,7 @@ Here's an example:
 ----
 public class MyVerticle extends AbstractVerticle {
 
-  private HttpServeer server;
+  private HttpServer server;
 
   public void start(Future<Void> startFuture) {
     server = vertx.createHttpServer().requestHandler(req -> {
@@ -93,5 +93,5 @@ public class MyVerticle extends AbstractVerticle {
 }
 ----
 
-INFO: You don't need to manually the HTTP server started by a verticle, in the verticle's stop method. Vert.x
+INFO: You don't need to manually stop the HTTP server started by a verticle, in the verticle's stop method. Vert.x
 will automatically stop any running server when the verticle is undeployed.

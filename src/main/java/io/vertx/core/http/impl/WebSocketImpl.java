@@ -12,6 +12,7 @@
 package io.vertx.core.http.impl;
 
 import io.vertx.core.http.WebSocket;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
 
@@ -24,12 +25,12 @@ import io.vertx.core.spi.metrics.HttpClientMetrics;
  * @author <a href="http://tfox.org">Tim Fox</a>
  *
  */
-public class WebSocketImpl extends WebSocketImplBase<WebSocket> implements WebSocket {
+public class WebSocketImpl extends WebSocketImplBase<WebSocketImpl> implements WebSocket {
 
-  public WebSocketImpl(VertxInternal vertx,
+  public WebSocketImpl(ContextInternal context,
                        Http1xClientConnection conn, boolean supportsContinuation,
                        int maxWebSocketFrameSize, int maxWebSocketMessageSize) {
-    super(vertx, conn, supportsContinuation, maxWebSocketFrameSize, maxWebSocketMessageSize);
+    super(context, conn, supportsContinuation, maxWebSocketFrameSize, maxWebSocketMessageSize);
   }
 
   @Override
@@ -39,7 +40,7 @@ public class WebSocketImpl extends WebSocketImplBase<WebSocket> implements WebSo
       if (metrics != null) {
         metrics.disconnected(getMetric());
       }
-      super.handleClosed();
     }
+    super.handleClosed();
   }
 }

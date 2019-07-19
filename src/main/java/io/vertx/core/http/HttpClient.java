@@ -14,12 +14,15 @@ package io.vertx.core.http;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.metrics.Measured;
-import io.vertx.core.streams.ReadStream;
+import io.vertx.core.net.SocketAddress;
 
+import java.util.List;
 import java.util.function.Function;
 
 /**
@@ -54,6 +57,16 @@ import java.util.function.Function;
 public interface HttpClient extends Measured {
 
   /**
+   * Like {@link #request(HttpMethod, RequestOptions)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code options} parameter.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options);
+
+  /**
    * Create an HTTP request to send to the server with the specified options.
    *
    * @param method  the HTTP method
@@ -73,6 +86,16 @@ public interface HttpClient extends Measured {
   HttpClientRequest request(HttpMethod method, int port, String host, String requestURI);
 
   /**
+   * Like {@link #request(HttpMethod, int, String, String)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code host} and {@code port} parameters.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI);
+
+  /**
    * Create an HTTP request to send to the server at the specified host and default port.
    * @param method  the HTTP method
    * @param host  the host
@@ -88,7 +111,17 @@ public interface HttpClient extends Measured {
    * @param options  the request options
    * @return  an HTTP client request object
    */
-  HttpClientRequest request(HttpMethod method, RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest request(HttpMethod method, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #request(HttpMethod, RequestOptions, Handler)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code options} parameter.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP request to send to the server at the specified host and port, specifying a response handler to receive
@@ -100,7 +133,17 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest request(HttpMethod method, int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest request(HttpMethod method, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #request(HttpMethod, int, String, String, Handler)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code host} and {@code port} parameters.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -111,7 +154,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest request(HttpMethod method, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest request(HttpMethod method, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP request to send to the server at the default host and port.
@@ -129,7 +172,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest request(HttpMethod method, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest request(HttpMethod method, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP request to send to the server using an absolute URI
@@ -140,6 +183,16 @@ public interface HttpClient extends Measured {
   HttpClientRequest requestAbs(HttpMethod method, String absoluteURI);
 
   /**
+   * Like {@link #requestAbs(HttpMethod, String)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code absoluteURI} parameter.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI);
+
+  /**
    * Create an HTTP request to send to the server using an absolute URI, specifying a response handler to receive
    * the response
    * @param method  the HTTP method
@@ -147,7 +200,17 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest requestAbs(HttpMethod method, String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest requestAbs(HttpMethod method, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #requestAbs(HttpMethod, String, Handler)} using the {@code serverAddress} parameter to connect to the
+   * server instead of the {@code absoluteURI} parameter.
+   * <p>
+   * The request host header will still be created from the {@code absoluteURI} parameter.
+   * <p>
+   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   */
+  HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP GET request to send to the server with the specified options.
@@ -180,7 +243,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest get(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest get(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP GET request to send to the server at the specified host and port, specifying a response handler to receive
@@ -191,7 +254,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest get(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest get(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP GET request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -201,7 +264,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest get(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest get(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP GET request to send to the server at the default host and port.
@@ -217,7 +280,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest get(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest get(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP GET request to send to the server using an absolute URI
@@ -233,7 +296,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest getAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest getAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Sends an HTTP GET request to the server with the specified options, specifying a response handler to receive
@@ -243,7 +306,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient getNow(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClient getNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #getNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> getNow(RequestOptions options) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    getNow(options, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP GET request to the server at the specified host and port, specifying a response handler to receive
@@ -255,7 +327,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient getNow(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient getNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #getNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> getNow(int port, String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    getNow(port, host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP GET request to the server at the specified host and default port, specifying a response handler to receive
@@ -266,7 +347,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient getNow(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient getNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #getNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> getNow(String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    getNow(host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP GET request  to the server at the default host and port, specifying a response handler to receive
@@ -276,7 +366,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient getNow(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient getNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #getNow(String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> getNow(String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    getNow(requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Create an HTTP POST request to send to the server with the specified options.
@@ -309,7 +408,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest post(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest post(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP POST request to send to the server at the specified host and port, specifying a response handler to receive
@@ -320,7 +419,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest post(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest post(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP POST request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -330,7 +429,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest post(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest post(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP POST request to send to the server at the default host and port.
@@ -346,7 +445,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest post(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest post(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP POST request to send to the server using an absolute URI
@@ -362,7 +461,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest postAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest postAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP HEAD request to send to the server with the specified options.
@@ -395,7 +494,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest head(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest head(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP HEAD request to send to the server at the specified host and port, specifying a response handler to receive
@@ -406,7 +505,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest head(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest head(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP HEAD request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -416,7 +515,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest head(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest head(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP HEAD request to send to the server at the default host and port.
@@ -432,7 +531,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest head(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest head(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP HEAD request to send to the server using an absolute URI
@@ -448,7 +547,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest headAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest headAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Sends an HTTP HEAD request to the server with the specified options, specifying a response handler to receive
@@ -458,7 +557,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient headNow(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClient headNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #headNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> headNow(RequestOptions options) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    headNow(options, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP HEAD request to the server at the specified host and port, specifying a response handler to receive
@@ -470,7 +578,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient headNow(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient headNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #headNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> headNow(int port, String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    headNow(port, host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP HEAD request to the server at the specified host and default port, specifying a response handler to receive
@@ -481,7 +598,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient headNow(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient headNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #headNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> headNow(String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    headNow(host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP HEAD request  to the server at the default host and port, specifying a response handler to receive
@@ -491,7 +617,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient headNow(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient headNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #headNow(String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> headNow(String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    headNow(requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Create an HTTP OPTIONS request to send to the server with the specified options.
@@ -524,7 +659,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest options(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest options(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP OPTIONS request to send to the server at the specified host and port, specifying a response handler to receive
@@ -535,7 +670,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest options(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest options(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP OPTIONS request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -545,7 +680,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest options(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest options(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP OPTIONS request to send to the server at the default host and port.
@@ -561,7 +696,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest options(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest options(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP OPTIONS request to send to the server using an absolute URI
@@ -577,7 +712,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest optionsAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest optionsAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Sends an HTTP OPTIONS request to the server with the specified options, specifying a response handler to receive
@@ -587,7 +722,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient optionsNow(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClient optionsNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #optionsNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> optionsNow(RequestOptions options) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    options(options, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP OPTIONS request to the server at the specified host and port, specifying a response handler to receive
@@ -599,7 +743,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient optionsNow(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient optionsNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #optionsNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> optionsNow(int port, String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    options(port, host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP OPTIONS request to the server at the specified host and default port, specifying a response handler to receive
@@ -610,7 +763,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient optionsNow(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient optionsNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #optionsNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> optionsNow(String host, String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    options(host, requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Sends an HTTP OPTIONS request  to the server at the default host and port, specifying a response handler to receive
@@ -620,7 +782,16 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient optionsNow(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClient optionsNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+
+  /**
+   * Like {@link #optionsNow(String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default Future<HttpClientResponse> optionsNow(String requestURI) {
+    Promise<HttpClientResponse> promise = Promise.promise();
+    options(requestURI, promise);
+    return promise.future();
+  }
 
   /**
    * Create an HTTP PUT request to send to the server with the specified options.
@@ -653,7 +824,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest put(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest put(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP PUT request to send to the server at the specified host and port, specifying a response handler to receive
@@ -664,7 +835,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest put(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest put(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP PUT request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -674,7 +845,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest put(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest put(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP PUT request to send to the server at the default host and port.
@@ -690,7 +861,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest put(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest put(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP PUT request to send to the server using an absolute URI
@@ -706,7 +877,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest putAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest putAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP DELETE request to send to the server with the specified options.
@@ -739,7 +910,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest delete(RequestOptions options, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest delete(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP DELETE request to send to the server at the specified host and port, specifying a response handler to receive
@@ -750,7 +921,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest delete(int port, String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest delete(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP DELETE request to send to the server at the specified host and default port, specifying a response handler to receive
@@ -760,7 +931,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest delete(String host, String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest delete(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP DELETE request to send to the server at the default host and port.
@@ -776,7 +947,7 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest delete(String requestURI, Handler<HttpClientResponse> responseHandler);
+  HttpClientRequest delete(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Create an HTTP DELETE request to send to the server using an absolute URI
@@ -792,256 +963,58 @@ public interface HttpClient extends Measured {
    * @param responseHandler  the response handler
    * @return  an HTTP client request object
    */
-  HttpClientRequest deleteAbs(String absoluteURI, Handler<HttpClientResponse> responseHandler);
-
-  /**
-   * Connect a WebSocket with the specified options
-   * @param options  the request options
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(RequestOptions options, Handler<WebSocket> wsConnect);
+  HttpClientRequest deleteAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
 
   /**
    * Connect a WebSocket to the specified port, host and relative request URI
    * @param port  the port
    * @param host  the host
    * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
+   * @param handler  handler that will be called with the websocket when connected
    */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, Handler<WebSocket> wsConnect);
+  void webSocket(int port, String host, String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
   /**
-   * Connect a WebSocket with the specified options
-   * @param options  the request options
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
+   * Like {@link #webSocket(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  @Fluent
-  HttpClient websocket(RequestOptions options, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified port, host and relative request URI
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
+  Future<WebSocket> webSocket(int port, String host, String requestURI);
 
   /**
    * Connect a WebSocket to the host and relative request URI and default port
    * @param host  the host
    * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
+   * @param handler  handler that will be called with the websocket when connected
    */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, Handler<WebSocket> wsConnect);
+  void webSocket(String host, String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
   /**
-   * Connect a WebSocket to the host and relative request URI and default port
-   * @param host  the host
+   * Like {@link #webSocket(String, String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<WebSocket> webSocket(String host, String requestURI);
+
+  /**
+   * Connect a WebSocket at the relative request URI using the default host and port
    * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
+   * @param handler  handler that will be called with the websocket when connected
    */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
+  void webSocket(String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
   /**
-   * Connect a WebSocket with the specified options, and with the specified headers
+   * Like {@link #webSocket(String, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<WebSocket> webSocket(String requestURI);
+
+  /**
+   * Connect a WebSocket with the specified options.
+   *
    * @param options  the request options
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
    */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, Handler<WebSocket> wsConnect);
+  void webSocket(WebSocketConnectOptions options, Handler<AsyncResult<WebSocket>> handler);
 
   /**
-   * Connect a WebSocket to the specified port, host and relative request URI, and with the specified headers
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
+   * Like {@link #webSocket(WebSocketConnectOptions, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket with the specified options, and with the specified headers
-   * @param options  the request options
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified port, host and relative request URI, and with the specified headers
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified host,relative request UR, and default port and with the specified headers
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket to the specified host,relative request UR, and default port and with the specified headers
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket with the specified optionsI, with the specified headers and using
-   * the specified version of WebSockets
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket to the specified port, host and relative request URI, with the specified headers and using
-   * the specified version of WebSockets
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket with the specified options, with the specified headers and using
-   * the specified version of WebSockets
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified port, host and relative request URI, with the specified headers and using
-   * the specified version of WebSockets
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified host, relative request URI and default port with the specified headers and using
-   * the specified version of WebSockets
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket to the specified host, relative request URI and default port with the specified headers and using
-   * the specified version of WebSockets
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket with the specified options, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket to the specified port, host and relative request URI, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect);
+  Future<WebSocket> webSocket(WebSocketConnectOptions options);
 
   /**
    * Connect a WebSocket with the specified absolute url, with the specified headers, using
@@ -1051,345 +1024,22 @@ public interface HttpClient extends Measured {
    * @param headers        the headers
    * @param version        the websocket version
    * @param subProtocols   the subprotocols to use
-   * @param wsConnect      handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
+   * @param handler handler that will be called if websocket connection fails
    */
-  @Fluent
-  HttpClient websocketAbs(String url, MultiMap headers, WebsocketVersion version, String subProtocols, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
+  void webSocketAbs(String url, MultiMap headers, WebsocketVersion version, List<String> subProtocols, Handler<AsyncResult<WebSocket>> handler);
 
   /**
-   * Connect a WebSocket with the specified options, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
+   * Like {@link #webSocketAbs(String, MultiMap, WebsocketVersion, List, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  @Fluent
-  HttpClient websocket(RequestOptions options, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
+  Future<WebSocket> webSocketAbs(String url, MultiMap headers, WebsocketVersion version, List<String> subProtocols);
 
   /**
-   * Connect a WebSocket to the specified port, host and relative request URI, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket to the specified host, relative request URI and default port, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket to the specified host, relative request URI and default port, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port
-   * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port
-   * @param requestURI  the relative URI
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port and the specified headers
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port and the specified headers
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port, the specified headers and the
-   * specified version of WebSockets
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port, the specified headers and the
-   * specified version of WebSockets
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, WebsocketVersion version,
-                       Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port, the specified headers, the
-   * specified version of WebSockets and the specified sub protocols
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect);
-
-  /**
-   * Connect a WebSocket at the relative request URI using the default host and port, the specified headers, the
-   * specified version of WebSockets and the specified sub protocols
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols
-   * @param wsConnect  handler that will be called with the websocket when connected
-   * @param failureHandler handler that will be called if websocket connection fails
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  HttpClient websocket(String requestURI, MultiMap headers, WebsocketVersion version,
-                       String subProtocols, Handler<WebSocket> wsConnect, Handler<Throwable> failureHandler);
-
-
-  /**
-   * Create a WebSocket stream with the specified options
-   * @param options  the request options
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(RequestOptions options);
-
-  /**
-   * Create a WebSocket stream to the specified port, host and relative request URI
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(int port, String host, String requestURI);
-
-  /**
-   * Create a WebSocket stream to the specified host, relative request URI and default port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String host, String requestURI);
-
-  /**
-   * Create a WebSocket stream with the specified options, and with the specified headers
-   * @param options  the request options
-   * @param headers  the headers
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(RequestOptions options, MultiMap headers);
-
-  /**
-   * Create a WebSocket stream to the specified port, host and relative request URI, and with the specified headers
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(int port, String host, String requestURI, MultiMap headers);
-
-  /**
-   * Create a WebSocket stream to the specified host, relative request URI and default port and with the specified headers
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String host, String requestURI, MultiMap headers);
-
-  /**
-   * Create a WebSocket stream with the specified options, with the specified headers and using
-   * the specified version of WebSockets
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(RequestOptions options, MultiMap headers, WebsocketVersion version);
-
-  /**
-   * Create a WebSocket stream to the specified port, host and relative request URI, with the specified headers and using
-   * the specified version of WebSockets
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version);
-
-  /**
-   * Create a WebSocket stream with the specified options and with the specified headers and using
-   * the specified version of WebSockets
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String host, String requestURI, MultiMap headers, WebsocketVersion version);
-
-  /**
-   * Create a WebSocket stream with the specified absolute url, the specified headers, using the specified version of WebSockets,
-   * and the specified websocket sub protocols.
+   * Set a connection handler for the client. This handler is called when a new connection is established.
    *
-   * @param url          the absolute url
-   * @param headers      the headers
-   * @param version      the websocket version
-   * @param subProtocols the subprotocols to use
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
+   * @return a reference to this, so the API can be used fluently
    */
-  ReadStream<WebSocket> websocketStreamAbs(String url, MultiMap headers, WebsocketVersion version, String subProtocols);
-
-  /**
-   * Create a WebSocket stream to the specified port, host and relative request URI, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param options  the request options
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(RequestOptions options, MultiMap headers, WebsocketVersion version,
-                                  String subProtocols);
-
-  /**
-   * Create a WebSocket stream to the specified port, host and relative request URI, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(int port, String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                                  String subProtocols);
-
-  /**
-   * Create a WebSocket stream to the specified host, relative request URI and default port, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols to use
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String host, String requestURI, MultiMap headers, WebsocketVersion version,
-                                  String subProtocols);
-
-  /**
-   * Create a WebSocket stream at the relative request URI using the default host and port and the specified headers
-   * @param requestURI  the relative URI
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String requestURI);
-
-  /**
-   * Create a WebSocket stream at the relative request URI using the default host and port and the specified headers
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String requestURI, MultiMap headers);
-
-  /**
-   * Create a WebSocket stream at the relative request URI using the default host and port, the specified headers and the
-   * specified version of WebSockets
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String requestURI, MultiMap headers, WebsocketVersion version);
-
-  /**
-   * Create a WebSocket stream at the relative request URI using the default host and port, the specified headers, the
-   * specified version of WebSockets and the specified sub protocols
-   * @param requestURI  the relative URI
-   * @param headers  the headers
-   * @param version  the websocket version
-   * @param subProtocols  the subprotocols
-   * @return a stream emitting a WebSocket event when the client connection has been upgraded to a websocket
-   */
-  ReadStream<WebSocket> websocketStream(String requestURI, MultiMap headers, WebsocketVersion version,
-                                  String subProtocols);
+  @Fluent
+  HttpClient connectionHandler(Handler<HttpConnection> handler);
 
   /**
    * Set a redirect handler for the http client.
@@ -1402,6 +1052,9 @@ public interface HttpClient extends Measured {
    *   <li>when null is returned, the original response is processed by the original request response handler</li>
    *   <li>when a new {@code Future<HttpClientRequest>} is returned, the client will send this new request</li>
    * </ul>
+   * The new request will get a copy of the previous request headers unless headers are set. In this case,
+   * the client assumes that the redirect handler exclusively managers the headers of the new request.
+   * <p>
    * The handler must return a {@code Future<HttpClientRequest>} unsent so the client can further configure it and send it.
    *
    * @param handler the new redirect handler

@@ -12,10 +12,12 @@
 package io.vertx.test.core;
 
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Context;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import org.hamcrest.Matcher;
 import org.junit.After;
 import org.junit.Assert;
@@ -25,11 +27,13 @@ import org.junit.internal.ArrayComparisonFailure;
 import org.junit.rules.TestName;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -46,6 +50,7 @@ public class AsyncTestBase {
   private boolean threadChecksEnabled = true;
   private volatile boolean tearingDown;
   private volatile String mainThreadName;
+  private volatile boolean lateFailure;
   private Map<String, Exception> threadNames = new ConcurrentHashMap<>();
   @Rule
   public TestName name = new TestName();
@@ -60,6 +65,7 @@ public class AsyncTestBase {
     testCompleteCalled = false;
     awaitCalled = false;
     threadNames.clear();
+    lateFailure = false;
   }
 
   protected void tearDown() throws Exception {
@@ -156,6 +162,9 @@ public class AsyncTestBase {
       // Throwable caught from non main thread
       throw new IllegalStateException("Assert or failure from non main thread but no await() on main thread", throwable);
     }
+    if (lateFailure) {
+      throw new IllegalStateException("Test reported a failure after completion");
+    }
     for (Map.Entry<String, Exception> entry: threadNames.entrySet()) {
       if (!entry.getKey().equals(mainThreadName)) {
         if (threadChecksEnabled && !entry.getKey().startsWith("vert.x-")) {
@@ -169,7 +178,8 @@ public class AsyncTestBase {
   }
 
   private void handleThrowable(Throwable t) {
-    if (tearingDown) {
+    if (testCompleteCalled) {
+      lateFailure = true;
       throw new IllegalStateException("assert or failure occurred after test has completed");
     }
     throwable = t;
@@ -585,24 +595,38 @@ public class AsyncTestBase {
   }
 
   protected void awaitLatch(CountDownLatch latch) throws InterruptedException {
-    assertTrue(latch.await(10, TimeUnit.SECONDS));
+    awaitLatch(latch, 10, TimeUnit.SECONDS);
   }
 
-  protected void assertWaitUntil(BooleanSupplier supplier) {
+  protected void awaitLatch(CountDownLatch latch, long timeout, TimeUnit unit) throws InterruptedException {
+    assertTrue(latch.await(timeout, unit));
+  }
+
+  public static void assertWaitUntil(BooleanSupplier supplier) {
     assertWaitUntil(supplier, 10000);
   }
 
-  protected void waitUntil(BooleanSupplier supplier) {
+  public static void waitUntil(BooleanSupplier supplier) {
     waitUntil(supplier, 10000);
   }
 
-  protected void assertWaitUntil(BooleanSupplier supplier, long timeout) {
+  public static <T> void waitUntilEquals(T value, Supplier<T> supplier) {
+    waitUntil(() -> Objects.equals(value, supplier.get()), 10000);
+  }
+
+  public static void assertWaitUntil(BooleanSupplier supplier, long timeout) {
     if (!waitUntil(supplier, timeout)) {
       throw new IllegalStateException("Timed out");
     }
   }
 
-  protected boolean waitUntil(BooleanSupplier supplier, long timeout) {
+  public static void assertWaitUntil(BooleanSupplier supplier, long timeout, String reason) {
+    if (!waitUntil(supplier, timeout)) {
+      throw new IllegalStateException("Timed out: " + reason);
+    }
+  }
+
+  public static boolean waitUntil(BooleanSupplier supplier, long timeout) {
     long start = System.currentTimeMillis();
     while (true) {
       if (supplier.getAsBoolean()) {
@@ -636,5 +660,9 @@ public class AsyncTestBase {
       latch.countDown();
     });
     awaitLatch(latch);
+  }
+
+  protected void assertSameEventLoop(Context expected, Context actual) {
+    assertSame(((ContextInternal)expected).nettyEventLoop(), ((ContextInternal)actual).nettyEventLoop());
   }
 }

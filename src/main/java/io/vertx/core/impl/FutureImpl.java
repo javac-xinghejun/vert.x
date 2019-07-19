@@ -14,8 +14,10 @@ package io.vertx.core.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 
-class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
+class FutureImpl<T> implements Promise<T>, Future<T> {
+
   private boolean failed;
   private boolean succeeded;
   private Handler<AsyncResult<T>> handler;
@@ -31,14 +33,14 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
   /**
    * The result of the operation. This will be null if the operation failed.
    */
-  public T result() {
+  public synchronized T result() {
     return result;
   }
 
   /**
    * An exception describing failure. This will be null if the operation succeeded.
    */
-  public Throwable cause() {
+  public synchronized Throwable cause() {
     return throwable;
   }
 
@@ -69,13 +71,20 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
   public Future<T> setHandler(Handler<AsyncResult<T>> handler) {
     boolean callHandler;
     synchronized (this) {
-      this.handler = handler;
       callHandler = isComplete();
+      if (!callHandler) {
+        this.handler = handler;
+      }
     }
     if (callHandler) {
       handler.handle(this);
     }
     return this;
+  }
+
+  @Override
+  public synchronized Handler<AsyncResult<T>> getHandler() {
+    return handler;
   }
 
   @Override
@@ -116,6 +125,7 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
       this.result = result;
       succeeded = true;
       h = handler;
+      handler = null;
     }
     if (h != null) {
       h.handle(this);
@@ -137,11 +147,6 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
   }
 
   @Override
-  public Handler<AsyncResult<T>> completer() {
-    return this;
-  }
-
-  @Override
   public void handle(AsyncResult<T> asyncResult) {
     if (asyncResult.succeeded()) {
       complete(asyncResult.result());
@@ -160,6 +165,7 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
       this.throwable = cause != null ? cause : new NoStackTraceThrowable(null);
       failed = true;
       h = handler;
+      handler = null;
     }
     if (h != null) {
       h.handle(this);
@@ -170,6 +176,11 @@ class FutureImpl<T> implements Future<T>, Handler<AsyncResult<T>> {
   @Override
   public boolean tryFail(String failureMessage) {
     return tryFail(new NoStackTraceThrowable(failureMessage));
+  }
+
+  @Override
+  public Future<T> future() {
+    return this;
   }
 
   @Override

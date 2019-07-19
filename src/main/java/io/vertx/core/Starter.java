@@ -12,10 +12,10 @@
 package io.vertx.core;
 
 import io.vertx.core.impl.Args;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.JsonObject;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
 import io.vertx.core.metrics.MetricsOptions;
 import io.vertx.core.spi.VertxMetricsFactory;
 
@@ -211,7 +211,7 @@ public class Starter {
       CountDownLatch latch = new CountDownLatch(1);
       AtomicReference<AsyncResult<Vertx>> result = new AtomicReference<>();
 
-      options.setClusterHost(clusterHost).setClusterPort(clusterPort).setClustered(true);
+      options.getEventBusOptions().setClustered(true).setHost(clusterHost).setPort(clusterPort);
       if (ha) {
         String haGroup = args.map.get("-hagroup");
         int quorumSize = args.getInt("-quorum");
@@ -238,8 +238,7 @@ public class Starter {
         return null;
       }
       if (result.get().failed()) {
-        log.error("Failed to form cluster");
-        result.get().cause().printStackTrace();
+        log.error("Failed to form cluster", result.get().cause());
         return null;
       }
       vertx = result.get().result();
@@ -380,6 +379,8 @@ public class Starter {
             arg = Long.valueOf(propVal);
           } else if (argType.equals(boolean.class)) {
             arg = Boolean.valueOf(propVal);
+          } else if (argType.isEnum()){
+            arg = Enum.valueOf((Class<? extends Enum>)argType, propVal);
           } else {
             log.warn("Invalid type for setter: " + argType);
             continue;
@@ -456,7 +457,7 @@ public class Starter {
   }
 
   public String getVersion() {
-    try (InputStream is = getClass().getClassLoader().getResourceAsStream("vertx-version.txt")) {
+    try (InputStream is = getClass().getClassLoader().getResourceAsStream("META-INF/vertx/vertx-version.txt")) {
       if (is == null) {
         throw new IllegalStateException("Cannot find vertx-version.txt on classpath");
       }

@@ -11,11 +11,9 @@
 
 package io.vertx.core.http;
 
-import io.vertx.codegen.annotations.CacheReturn;
-import io.vertx.codegen.annotations.Fluent;
-import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.Nullable;
-import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.codegen.annotations.*;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
@@ -37,6 +35,9 @@ import java.util.List;
  */
 @VertxGen
 public interface HttpClientResponse extends ReadStream<Buffer> {
+
+  @Override
+  HttpClientResponse fetch(long amount);
 
   @Override
   HttpClientResponse resume();
@@ -88,7 +89,7 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
    * @param headerName  the header name
    * @return the header value
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   String getHeader(CharSequence headerName);
 
   /**
@@ -123,6 +124,26 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
   HttpClientResponse bodyHandler(Handler<Buffer> bodyHandler);
 
   /**
+   * Same as {@link #body()} but with an {@code handler} called when the operation completes
+   */
+  @Fluent
+  default HttpClientResponse body(Handler<AsyncResult<Buffer>> handler) {
+    Future<Buffer> fut = body();
+    fut.setHandler(handler);
+    return this;
+  }
+
+  /**
+   * Convenience method for receiving the entire request body in one piece.
+   * <p>
+   * This saves you having to manually set a dataHandler and an endHandler and append the chunks of the body until
+   * the whole body received. Don't use this if your request body is large - you could potentially run out of RAM.
+   *
+   * @return a future completed with the body result
+   */
+  Future<Buffer> body();
+
+  /**
    * Set an custom frame handler. The handler will get notified when the http stream receives an custom HTTP/2
    * frame. HTTP/2 permits extension of the protocol.
    *
@@ -134,7 +155,9 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
   /**
    * Get a net socket for the underlying connection of this request.
    * <p>
-   * USE THIS WITH CAUTION! Writing to the socket directly if you don't know what you're doing can easily break the HTTP protocol
+   * USE THIS WITH CAUTION! Writing to the socket directly if you don't know what you're doing can easily break the HTTP protocol.
+   * <p>
+   * HTTP/1.1 pipe-lined requests cannot support net socket upgrade.
    * <p>
    * One valid use-case for calling this is to receive the {@link io.vertx.core.net.NetSocket} after a HTTP CONNECT was issued to the
    * remote peer and it responded with a status code of 200.
@@ -149,4 +172,14 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
    */
   @CacheReturn
   HttpClientRequest request();
+
+  /**
+   * Set an handler for stream priority changes.
+   * <p/>
+   * This is not implemented for HTTP/1.x.
+   *
+   * @param handler the handler to be called when the stream priority changes
+   */
+  @Fluent
+  HttpClientResponse streamPriorityHandler(Handler<StreamPriority> handler);
 }

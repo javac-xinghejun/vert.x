@@ -16,6 +16,9 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ClientAuth;
 import io.vertx.core.json.JsonObject;
 
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
 /**
  * Options for configuring a {@link io.vertx.core.net.NetServer}.
  *
@@ -150,14 +153,14 @@ public class NetServerOptions extends TCPSSLOptions {
   }
 
   @Override
-  public NetServerOptions setUsePooledBuffers(boolean usePooledBuffers) {
-    super.setUsePooledBuffers(usePooledBuffers);
+  public NetServerOptions setIdleTimeout(int idleTimeout) {
+    super.setIdleTimeout(idleTimeout);
     return this;
   }
 
   @Override
-  public NetServerOptions setIdleTimeout(int idleTimeout) {
-    super.setIdleTimeout(idleTimeout);
+  public NetServerOptions setIdleTimeoutUnit(TimeUnit idleTimeoutUnit) {
+    super.setIdleTimeoutUnit(idleTimeoutUnit);
     return this;
   }
 
@@ -275,6 +278,21 @@ public class NetServerOptions extends TCPSSLOptions {
     return (NetServerOptions) super.addCrlValue(crlValue);
   }
 
+  @Override
+  public NetServerOptions setEnabledSecureTransportProtocols(Set<String> enabledSecureTransportProtocols) {
+    return (NetServerOptions) super.setEnabledSecureTransportProtocols(enabledSecureTransportProtocols);
+  }
+
+  @Override
+  public NetServerOptions setSslHandshakeTimeout(long sslHandshakeTimeout) {
+    return (NetServerOptions) super.setSslHandshakeTimeout(sslHandshakeTimeout);
+  }
+
+  @Override
+  public NetServerOptions setSslHandshakeTimeoutUnit(TimeUnit sslHandshakeTimeoutUnit) {
+    return (NetServerOptions) super.setSslHandshakeTimeoutUnit(sslHandshakeTimeoutUnit);
+  }
+
   /**
    * @return the value of accept backlog
    */
@@ -333,27 +351,6 @@ public class NetServerOptions extends TCPSSLOptions {
     return this;
   }
 
-  /**
-   *
-   * @return true if client auth is required
-   */
-  @Deprecated
-  public boolean isClientAuthRequired() {
-    return clientAuth == ClientAuth.REQUIRED;
-  }
-
-  /**
-   * Set whether client auth is required
-   *
-   * @param clientAuthRequired  true if client auth is required
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Deprecated
-  public NetServerOptions setClientAuthRequired(boolean clientAuthRequired) {
-    this.clientAuth = clientAuthRequired ? ClientAuth.REQUIRED : ClientAuth.NONE;
-    return this;
-  }
-
   public ClientAuth getClientAuth() {
     return clientAuth;
   }
@@ -391,34 +388,6 @@ public class NetServerOptions extends TCPSSLOptions {
   public NetServerOptions setSni(boolean sni) {
     this.sni = sni;
     return this;
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) return true;
-    if (!(o instanceof NetServerOptions)) return false;
-    if (!super.equals(o)) return false;
-
-    NetServerOptions that = (NetServerOptions) o;
-
-    if (acceptBacklog != that.acceptBacklog) return false;
-    if (clientAuth != that.clientAuth) return false;
-    if (port != that.port) return false;
-    if (host != null ? !host.equals(that.host) : that.host != null) return false;
-    if (sni != that.sni) return false;
-
-    return true;
-  }
-
-  @Override
-  public int hashCode() {
-    int result = super.hashCode();
-    result = 31 * result + port;
-    result = 31 * result + (host != null ? host.hashCode() : 0);
-    result = 31 * result + acceptBacklog;
-    result = 31 * result + clientAuth.hashCode();
-    result = 31 * result + (sni ? 1 : 0);
-    return result;
   }
 
   private void init() {

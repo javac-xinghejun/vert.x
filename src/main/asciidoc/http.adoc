@@ -56,7 +56,7 @@ WARNING: most browsers won't support `h2c`, so for serving web sites you should 
 When a server accepts an HTTP/2 connection, it sends to the client its {@link io.vertx.core.http.HttpServerOptions#getInitialSettings initial settings}.
 The settings define how the client can use the connection, the default initial settings for a server are:
 
-- {@link io.vertx.core.http.Http2Settings#getMaxConcurrentStreams}: {@code 100} as recommended by the HTTP/2 RFC
+- {@link io.vertx.core.http.Http2Settings#getMaxConcurrentStreams}: `100` as recommended by the HTTP/2 RFC
 - the default HTTP/2 settings values for the others
 
 NOTE: Worker Verticles are not compatible with HTTP/2
@@ -389,7 +389,7 @@ to the client
 
 ==== Writing HTTP responses
 
-To write data to an HTTP response, you use one the {@link io.vertx.core.http.HttpServerResponse#write} operations.
+To write data to an HTTP response, you use one of the {@link io.vertx.core.http.HttpServerResponse#write} operations.
 
 These can be invoked multiple times before the response is ended. They can be invoked in a few ways:
 
@@ -420,7 +420,7 @@ Writing to a response is asynchronous and always returns immediately after the w
 If you are just writing a single string or buffer to the HTTP response you can write it and end the response in a
 single call to the {@link io.vertx.core.http.HttpServerResponse#end(String)}
 
-The first call to write results in the response header being being written to the response. Consequently, if you are
+The first call to write results in the response header being written to the response. Consequently, if you are
 not using HTTP chunking then you must set the `Content-Length` header before writing to the response, since it will
 be too late otherwise. If you are using HTTP chunking you do not have to worry.
 
@@ -775,7 +775,7 @@ Both methods of specifying host/port are supported for all the different ways of
 Often, you'll want to make HTTP requests with no request body. This is usually the case with HTTP GET, OPTIONS and
 HEAD requests.
 
-The simplest way to do this with the Vert.x http client is using the methods prefixed with `Now`. For example
+The simplest way to do this with the Vert.x http client is using the methods suffixed with `Now`. For example
 {@link io.vertx.core.http.HttpClient#getNow}.
 
 These methods create the http request and send it in a single method call and allow you to provide a handler that will be
@@ -944,7 +944,7 @@ IMPORTANT: `XXXNow` methods cannot receive an exception handler.
 
 Instead of providing a response handler in the call to create the client request object, alternatively, you can
 not provide a handler when the request is created and set it later on the request object itself, using
-{@link io.vertx.core.http.HttpClientRequest#handler(io.vertx.core.Handler)}, for example:
+{@link io.vertx.core.http.HttpClientRequest#setHandler(io.vertx.core.Handler)}, for example:
 
 [source,$lang]
 ----
@@ -1096,9 +1096,7 @@ Here's an example:
 The redirection policy is as follow
 
 * on a `301`, `302` or `303` status code, follow the redirection with a `GET` method
-* on a `307` status code, follow the redirection with the same HTTP method and the cached body
-
-WARNING: following redirections caches the request body
+* on a `307` status code, follow the redirection with the same HTTP method
 
 The maximum redirects is `16` by default and can be changed with {@link io.vertx.core.http.HttpClientOptions#setMaxRedirects(int)}.
 
@@ -1264,10 +1262,15 @@ The maximum number of connections to pool *for each server* is configured using 
 When making a request with pooling enabled, Vert.x will create a new connection if there are less than the maximum number of
 connections already created for that server, otherwise it will add the request to a queue.
 
-Keep alive connections will not be closed by the client automatically. To close them you can close the client instance.
+Keep alive connections will be closed by the client automatically after a timeout. The timeout can be specified
+by the server using the `keep-alive` header:
 
-Alternatively you can set idle timeout using {@link io.vertx.core.http.HttpClientOptions#setIdleTimeout(int)} - any
-connections not used within this timeout will be closed. Please note the idle timeout value is in seconds not milliseconds.
+----
+ keep-alive: timeout=30
+----
+
+You can set the default timeout using {@link io.vertx.core.http.HttpClientOptions#setKeepAliveTimeout(int)} - any
+connections not used within this timeout will be closed. Please note the timeout value is in seconds not milliseconds.
 
 === HTTP/1.1 pipe-lining
 
@@ -1545,7 +1548,7 @@ method.
 
 The {@link io.vertx.core.http.HttpClientOptions#setSsl(boolean)} setting acts as the default client setting.
 
-The {@link io.vertx.core.http.RequestOptions#setSsl(boolean)} overrides the default client setting
+The {@link io.vertx.core.http.RequestOptions#setSsl(Boolean)} overrides the default client setting
 
 * setting the value to `false` will disable SSL/TLS even if the client is configured to use SSL/TLS
 * setting the value to `true` will enable SSL/TLS  even if the client is configured to not use SSL/TLS, the actual
@@ -1591,6 +1594,15 @@ You can choose to reject the WebSocket by calling {@link io.vertx.core.http.Serv
 {@link examples.HTTPExamples#example52}
 ----
 
+You can perform an asynchronous handshake by calling {@link io.vertx.core.http.ServerWebSocket#setHandshake} with a `Future`:
+
+[source,$lang]
+----
+{@link examples.HTTPExamples#exampleAsynchronousHandshake}
+----
+
+NOTE: the WebSocket will be automatically accepted after the handler is called unless the WebSocket's handshake has been set
+
 ===== Upgrading to WebSocket
 
 The second way of handling WebSockets is to handle the HTTP Upgrade request that was sent from the client, and
@@ -1611,7 +1623,7 @@ The {@link io.vertx.core.http.ServerWebSocket} instance enables you to retrieve 
 
 The Vert.x {@link io.vertx.core.http.HttpClient} supports WebSockets.
 
-You can connect a WebSocket to a server using one of the {@link io.vertx.core.http.HttpClient#websocket} operations and
+You can connect a WebSocket to a server using one of the {@link io.vertx.core.http.HttpClient#webSocket} operations and
 providing a handler.
 
 The handler will be called with an instance of {@link io.vertx.core.http.WebSocket} when the connection has been made:

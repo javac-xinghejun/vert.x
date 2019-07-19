@@ -16,11 +16,11 @@
   <parent>
     <groupId>io.vertx</groupId>
     <artifactId>vertx-parent</artifactId>
-    <version>12</version>
+    <version>14</version>
   </parent>
 
   <artifactId>vertx-core</artifactId>
-  <version>3.6.0-SNAPSHOT</version>
+  <version>4.0.0-SNAPSHOT</version>
 
   <name>Vert.x Core</name>
 
@@ -44,7 +44,7 @@
   </scm>
 
   <properties>
-    <tcnative.version>2.0.7.Final</tcnative.version>
+    <tcnative.version>2.0.23.Final</tcnative.version>
     <log4j.version>1.2.17</log4j.version>
     <slf4j.version>1.7.21</slf4j.version>
     <log4j2.version>2.8.2</log4j2.version>
@@ -52,7 +52,7 @@
     <assertj.version>3.4.1</assertj.version>
     <apacheds-protocol-dns.version>1.5.7</apacheds-protocol-dns.version>
     <generated.dir>${project.basedir}/src/main/generated</generated.dir>
-    <stack.version>3.6.0-SNAPSHOT</stack.version>
+    <stack.version>4.0.0-SNAPSHOT</stack.version>
     <jetty.alpnAgent.argLine/>
     <jmh.version>1.19</jmh.version>
     <vertx.testNativeTransport>false</vertx.testNativeTransport>
@@ -234,6 +234,7 @@
               <vertx.handle100Continue>true</vertx.handle100Continue>
               <vertx.useNativeTransport>${vertx.testNativeTransport}</vertx.useNativeTransport>
               <vertx.useDomainSockets>${vertx.testDomainSockets}</vertx.useDomainSockets>
+              <vertx.threadChecks>true</vertx.threadChecks>
             </systemPropertyVariables>
             <!-- Needs to be small enough to run in a EC2 1.7GB small instance -->
             <!-- IMPORTANT: when modifying this line, don't forge to modify the same line in the`coverage` profile -->
@@ -241,7 +242,7 @@
             <forkCount>1</forkCount>
             <reuseForks>true</reuseForks>
             <excludes>
-              <exclude>io/vertx/test/it/**</exclude>
+              <exclude>io/vertx/it/**</exclude>
             </excludes>
           </configuration>
         </plugin>
@@ -308,26 +309,10 @@
                 <codegen.output>${project.basedir}/src/main</codegen.output>
                 <codegen.output.data_object_converters>generated</codegen.output.data_object_converters>
                 <docgen.source>${asciidoc.dir}</docgen.source>
-                <docgen.output>${project.build.directory}/asciidoctor/java</docgen.output>
+                <docgen.output>${project.build.directory}/asciidoc/java</docgen.output>
                 <maven.groupId>${project.groupId}</maven.groupId>
                 <maven.artifactId>${project.artifactId}</maven.artifactId>
                 <maven.version>${project.version}</maven.version>
-              </optionMap>
-            </configuration>
-          </execution>
-          <execution>
-            <id>generate-test-sources</id>
-            <goals>
-              <goal>process-test</goal>
-            </goals>
-            <phase>generate-test-sources</phase>
-            <configuration>
-              <processors>
-                <processor>io.vertx.codegen.CodeGenProcessor</processor>
-              </processors>
-              <optionMap>
-                <codegen.output>${project.basedir}/src/test</codegen.output>
-                <codegen.output.data_object_converters>generated</codegen.output.data_object_converters>
               </optionMap>
             </configuration>
           </execution>
@@ -361,7 +346,6 @@
             <configuration>
               <sources>
                 <source>${project.basedir}/src/test/benchmarks</source>
-                <source>${project.basedir}/src/test/generated</source>
               </sources>
             </configuration>
           </execution>
@@ -382,7 +366,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/SSLEngineTest.java</include>
+                <include>io/vertx/it/SSLEngineTest.java</include>
               </includes>
               <systemProperties>
                 <vertx-test-alpn-jdk>false</vertx-test-alpn-jdk>
@@ -401,7 +385,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/SSLEngineTest.java</include>
+                <include>io/vertx/it/SSLEngineTest.java</include>
               </includes>
               <systemProperties>
                 <vertx-test-alpn-jdk>false</vertx-test-alpn-jdk>
@@ -419,7 +403,7 @@
             <configuration>
               <argLine>${jetty.alpnAgent.argLine}</argLine>
               <includes>
-                <include>io/vertx/test/it/SSLEngineTest.java</include>
+                <include>io/vertx/it/SSLEngineTest.java</include>
               </includes>
               <systemProperties>
                 <vertx-test-alpn-jdk>true</vertx-test-alpn-jdk>
@@ -440,7 +424,7 @@
             <configuration>
               <argLine>${jetty.alpnAgent.argLine}</argLine>
               <includes>
-                <include>io/vertx/test/it/SSLEngineTest.java</include>
+                <include>io/vertx/it/SSLEngineTest.java</include>
               </includes>
               <systemProperties>
                 <vertx-test-alpn-jdk>true</vertx-test-alpn-jdk>
@@ -457,7 +441,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/TransportTest.java</include>
+                <include>io/vertx/it/TransportTest.java</include>
               </includes>
               <classpathDependencyExcludes>
                 <classpathDependencyExclude>io.netty:netty-transport-native-epoll</classpathDependencyExclude>
@@ -473,7 +457,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/SLF4JLogDelegateTest.java</include>
+                <include>io/vertx/it/SLF4JLogDelegateTest.java</include>
               </includes>
             </configuration>
           </execution>
@@ -485,7 +469,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/JULLogDelegateTest.java</include>
+                <include>io/vertx/it/JULLogDelegateTest.java</include>
               </includes>
             </configuration>
           </execution>
@@ -497,7 +481,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/Log4J2LogDelegateTest.java</include>
+                <include>io/vertx/it/Log4J2LogDelegateTest.java</include>
               </includes>
             </configuration>
           </execution>
@@ -513,7 +497,7 @@
             <phase>integration-test</phase>
             <configuration>
               <includes>
-                <include>io/vertx/test/it/NettyCompatTest.java</include>
+                <include>io/vertx/it/NettyCompatTest.java</include>
               </includes>
               <classpathDependencyExcludes>
                 <classpathDependencyExclude>io.netty:netty-common</classpathDependencyExclude>
@@ -658,9 +642,9 @@
     <profile>
       <id>java-8</id>
       <properties>
-        <jetty.alpnAgent.version>2.0.7</jetty.alpnAgent.version>
+        <jetty.alpnAgent.version>2.0.9</jetty.alpnAgent.version>
         <jetty.alpnAgent.path>${settings.localRepository}/org/mortbay/jetty/alpn/jetty-alpn-agent/${jetty.alpnAgent.version}/jetty-alpn-agent-${jetty.alpnAgent.version}.jar</jetty.alpnAgent.path>
-        <jetty.alpnAgent.argLine>-javaagent:${jetty.alpnAgent.path}</jetty.alpnAgent.argLine>
+        <jetty.alpnAgent.argLine>-javaagent:"${jetty.alpnAgent.path}"</jetty.alpnAgent.argLine>
       </properties>
       <activation>
         <jdk>1.8</jdk>
@@ -736,7 +720,7 @@
                   <goal>process-asciidoc</goal>
                 </goals>
                 <configuration>
-                  <sourceDirectory>${project.build.directory}/asciidoctor</sourceDirectory>
+                  <sourceDirectory>${project.build.directory}/asciidoc</sourceDirectory>
                 </configuration>
                 <phase>package</phase>
               </execution>

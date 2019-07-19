@@ -15,15 +15,17 @@ import io.netty.buffer.ByteBuf;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.file.AsyncFile;
 import io.vertx.core.file.FileSystemException;
 import io.vertx.core.file.OpenOptions;
 import io.vertx.core.impl.Arguments;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.streams.impl.InboundBuffer;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -57,7 +59,7 @@ public class AsyncFileImpl implements AsyncFile {
 
   private final VertxInternal vertx;
   private final AsynchronousFileChannel ch;
-  private final ContextImpl context;
+  private final ContextInternal context;
   private boolean closed;
   private Runnable closedDeferred;
   private long writesOutstanding;
@@ -67,13 +69,13 @@ public class AsyncFileImpl implements AsyncFile {
   private int maxWrites = 128 * 1024;    // TODO - we should tune this for best performance
   private int lwm = maxWrites / 2;
   private int readBufferSize = DEFAULT_READ_BUFFER_SIZE;
-  private boolean paused;
-  private Handler<Buffer> dataHandler;
+  private InboundBuffer<Buffer> queue;
+  private Handler<Buffer> handler;
   private Handler<Void> endHandler;
   private long readPos;
-  private boolean readInProgress;
+  private long readLength = Long.MAX_VALUE;
 
-  AsyncFileImpl(VertxInternal vertx, String path, OpenOptions options, ContextImpl context) {
+  AsyncFileImpl(VertxInternal vertx, String path, OpenOptions options, ContextInternal context) {
     if (!options.isRead() && !options.isWrite()) {
       throw new FileSystemException("Cannot open file for neither reading nor writing");
     }
@@ -101,11 +103,24 @@ public class AsyncFileImpl implements AsyncFile {
       throw new FileSystemException(e);
     }
     this.context = context;
+    this.queue = new InboundBuffer<>(context, 0);
+    queue.handler(buff -> {
+      if (buff.length() > 0) {
+        handleBuffer(buff);
+      } else {
+        handleEnd();
+      }
+    });
+    queue.drainHandler(v -> {
+      doRead();
+    });
   }
 
   @Override
-  public void close() {
-    closeInternal(null);
+  public Future<Void> close() {
+    Promise<Void> promise = Promise.promise();
+    closeInternal(promise);
+    return promise.future();
   }
 
   @Override
@@ -114,8 +129,15 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   @Override
-  public void end() {
-    close();
+  public Future<Void> end() {
+    Promise<Void> promise = Promise.promise();
+    close(promise);
+    return promise.future();
+  }
+
+  @Override
+  public void end(Handler<AsyncResult<Void>> handler) {
+    close(handler);
   }
 
   @Override
@@ -132,12 +154,32 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   @Override
-  public AsyncFile write(Buffer buffer, long position, Handler<AsyncResult<Void>> handler) {
-    Objects.requireNonNull(handler, "handler");
-    return doWrite(buffer, position, handler);
+  public Future<Buffer> read(Buffer buffer, int offset, long position, int length) {
+    Promise<Buffer> promise = Promise.promise();
+    read(buffer, offset, position, length, promise);
+    return promise.future();
   }
 
-  private synchronized AsyncFile doWrite(Buffer buffer, long position, Handler<AsyncResult<Void>> handler) {
+  @Override
+  public AsyncFile fetch(long amount) {
+    queue.fetch(amount);
+    return this;
+  }
+
+  @Override
+  public void write(Buffer buffer, long position, Handler<AsyncResult<Void>> handler) {
+    Objects.requireNonNull(handler, "handler");
+    doWrite(buffer, position, handler);
+  }
+
+  @Override
+  public Future<Void> write(Buffer buffer, long position) {
+    Promise<Void> promise = Promise.promise();
+    write(buffer, position, promise);
+    return promise.future();
+  }
+
+  private synchronized void doWrite(Buffer buffer, long position, Handler<AsyncResult<Void>> handler) {
     Objects.requireNonNull(buffer, "buffer");
     Arguments.require(position >= 0, "position must be >= 0");
     check();
@@ -171,15 +213,20 @@ public class AsyncFileImpl implements AsyncFile {
       ByteBuffer bb = buf.nioBuffer();
       doWrite(bb, position, bb.limit(),  wrapped);
     }
-    return this;
   }
 
   @Override
-  public synchronized AsyncFile write(Buffer buffer) {
+  public Future<Void> write(Buffer buffer) {
+    Promise<Void> promise = Promise.promise();
+    write(buffer, promise);
+    return promise.future();
+  }
+
+  @Override
+  public synchronized void write(Buffer buffer, Handler<AsyncResult<Void>> handler) {
     int length = buffer.length();
-    doWrite(buffer, writePos, null);
+    doWrite(buffer, writePos, handler);
     writePos += length;
-    return this;
   }
 
   @Override
@@ -221,9 +268,14 @@ public class AsyncFileImpl implements AsyncFile {
   @Override
   public synchronized AsyncFile handler(Handler<Buffer> handler) {
     check();
-    this.dataHandler = handler;
-    if (dataHandler != null && !paused && !closed) {
+    if (closed) {
+      return this;
+    }
+    this.handler = handler;
+    if (handler != null) {
       doRead();
+    } else {
+      queue.clear();
     }
     return this;
   }
@@ -238,27 +290,25 @@ public class AsyncFileImpl implements AsyncFile {
   @Override
   public synchronized AsyncFile pause() {
     check();
-    paused = true;
+    queue.pause();
     return this;
   }
 
   @Override
   public synchronized AsyncFile resume() {
     check();
-    if (paused && !closed) {
-      paused = false;
-      if (dataHandler != null) {
-        doRead();
-      }
+    if (!closed) {
+      queue.resume();
     }
     return this;
   }
 
 
   @Override
-  public AsyncFile flush() {
-    doFlush(null);
-    return this;
+  public Future<Void> flush() {
+    Promise<Void> promise = Promise.promise();
+    doFlush(promise);
+    return promise.future();
   }
 
   @Override
@@ -274,9 +324,20 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   @Override
+  public synchronized AsyncFile setReadLength(long readLength) {
+    this.readLength = readLength;
+    return this;
+  }
+
+  @Override
   public synchronized AsyncFile setWritePos(long writePos) {
     this.writePos = writePos;
     return this;
+  }
+
+  @Override
+  public synchronized long getWritePos() {
+    return writePos;
   }
 
   private synchronized void checkDrained() {
@@ -316,52 +377,51 @@ public class AsyncFileImpl implements AsyncFile {
     }
   }
 
-  private synchronized void doRead() {
-    if (!readInProgress) {
-      readInProgress = true;
-      Buffer buff = Buffer.buffer(readBufferSize);
-      read(buff, 0, readPos, readBufferSize, ar -> {
-        if (ar.succeeded()) {
-          readInProgress = false;
-          Buffer buffer = ar.result();
-          if (buffer.length() == 0) {
-            // Empty buffer represents end of file
-            handleEnd();
-          } else {
-            readPos += buffer.length();
-            handleData(buffer);
-            if (!paused && dataHandler != null) {
-              doRead();
-            }
-          }
-        } else {
-          handleException(ar.cause());
-        }
-      });
-    }
+  private void doRead() {
+    doRead(ByteBuffer.allocate(readBufferSize));
   }
 
-  private synchronized void handleData(Buffer buffer) {
-    if (dataHandler != null) {
+  private synchronized void doRead(ByteBuffer bb) {
+    Buffer buff = Buffer.buffer(readBufferSize);
+    int readSize = (int) Math.min((long)readBufferSize, readLength);
+    bb.limit(readSize);
+    doRead(buff, 0, bb, readPos, ar -> {
+      if (ar.succeeded()) {
+        Buffer buffer = ar.result();
+        readPos += buffer.length();
+        readLength -= buffer.length();
+        // Empty buffer represents end of file
+        if (queue.write(buffer) && buffer.length() > 0) {
+          doRead(bb);
+        }
+      } else {
+        handleException(ar.cause());
+      }
+    });
+  }
+
+  private synchronized void handleBuffer(Buffer buff) {
+    if (handler != null) {
       checkContext();
-      dataHandler.handle(buffer);
+      handler.handle(buff);
     }
   }
 
   private synchronized void handleEnd() {
-    dataHandler = null;
+    handler = null;
     if (endHandler != null) {
       checkContext();
       endHandler.handle(null);
     }
   }
 
+
   private synchronized void doFlush(Handler<AsyncResult<Void>> handler) {
     checkClosed();
-    context.executeBlocking(() -> {
+    context.executeBlockingInternal((Promise<Void> fut) -> {
       try {
         ch.force(false);
-        return null;
+        fut.complete();
       } catch (IOException e) {
         throw new FileSystemException(e);
       }
@@ -369,13 +429,14 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   private void doWrite(ByteBuffer buff, long position, long toWrite, Handler<AsyncResult<Void>> handler) {
-    if (toWrite == 0) {
-      throw new IllegalStateException("Cannot save zero bytes");
+    if (toWrite > 0) {
+      synchronized (this) {
+        writesOutstanding += toWrite;
+      }
+      writeInternal(buff, position, handler);
+    } else {
+      handler.handle(Future.succeededFuture());
     }
-    synchronized (this) {
-      writesOutstanding += toWrite;
-    }
-    writeInternal(buff, position, handler);
   }
 
   private void writeInternal(ByteBuffer buff, long position, Handler<AsyncResult<Void>> handler) {
@@ -422,6 +483,7 @@ public class AsyncFileImpl implements AsyncFile {
         context.runOnContext((v) -> {
           buff.flip();
           writeBuff.setBytes(offset, buff);
+          buff.compact();
           handler.handle(Future.succeededFuture(writeBuff));
         });
       }
@@ -465,8 +527,8 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   private void doClose(Handler<AsyncResult<Void>> handler) {
-    ContextImpl handlerContext = vertx.getOrCreateContext();
-    handlerContext.executeBlocking(res -> {
+    ContextInternal handlerContext = vertx.getOrCreateContext();
+    handlerContext.executeBlockingInternal(res -> {
       try {
         ch.close();
         res.complete(null);
@@ -487,5 +549,4 @@ public class AsyncFileImpl implements AsyncFile {
       closedDeferred = () -> doClose(handler);
     }
   }
-
 }

@@ -11,40 +11,95 @@
 
 package io.vertx.core.net.impl;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.Unpooled;
+import io.netty.buffer.*;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.vertx.core.Handler;
-import io.vertx.core.impl.ContextImpl;
-import io.vertx.core.impl.ContextTask;
+import io.vertx.core.impl.ContextInternal;
+
+import java.util.function.Function;
 
 /**
  * @author <a href="mailto:nmaurer@redhat.com">Norman Maurer</a>
  */
-public abstract class   VertxHandler<C extends ConnectionBase> extends ChannelDuplexHandler {
+public final class VertxHandler<C extends ConnectionBase> extends ChannelDuplexHandler {
 
+  public static ByteBuf safeBuffer(ByteBufHolder holder, ByteBufAllocator allocator) {
+    return safeBuffer(holder.content(), allocator);
+  }
+
+  public static ByteBuf safeBuffer(ByteBuf buf, ByteBufAllocator allocator) {
+    if (buf == Unpooled.EMPTY_BUFFER) {
+      return buf;
+    }
+    if (buf.isDirect() || buf instanceof CompositeByteBuf) {
+      try {
+        if (buf.isReadable()) {
+          ByteBuf buffer =  allocator.heapBuffer(buf.readableBytes());
+          buffer.writeBytes(buf);
+          return buffer;
+        } else {
+          return Unpooled.EMPTY_BUFFER;
+        }
+      } finally {
+        buf.release();
+      }
+    }
+    return buf;
+  }
+
+  private static final Handler<Object> NULL_HANDLER = m -> { };
+
+  public static <C extends ConnectionBase> VertxHandler<C> create(C connection) {
+    return create(connection.context, ctx -> connection);
+  }
+
+  public static <C extends ConnectionBase> VertxHandler<C> create(ContextInternal context, Function<ChannelHandlerContext, C> connectionFactory) {
+    return new VertxHandler<>(context, connectionFactory);
+  }
+
+  private final Function<ChannelHandlerContext, C> connectionFactory;
+  private final ContextInternal context;
   private C conn;
-  private ContextTask endReadAndFlush;
   private Handler<C> addHandler;
   private Handler<C> removeHandler;
+  private Handler<Object> messageHandler;
+
+  private VertxHandler(ContextInternal context, Function<ChannelHandlerContext, C> connectionFactory) {
+    this.context = context;
+    this.connectionFactory = connectionFactory;
+  }
 
   /**
-   * Set the connection, this is usually called by subclasses when the channel is added to the pipeline.
+   * Set the connection, this is called when the channel is added to the pipeline.
    *
    * @param connection the connection
    */
-  protected void setConnection(C connection) {
+  private void setConnection(C connection) {
     conn = connection;
-    endReadAndFlush = conn::endReadAndFlush;
+    messageHandler = ((ConnectionBase)conn)::handleMessage; // Dubious cast to make compiler happy
     if (addHandler != null) {
       addHandler.handle(connection);
     }
+  }
+
+  /**
+   * Fail the connection, the {@code error} will be sent to the pipeline and the connection will
+   * stop processing any further message.
+   *
+   * @param error the {@code Throwable} to propagate
+   */
+  void fail(Throwable error) {
+    messageHandler = NULL_HANDLER;
+    conn.chctx.pipeline().fireExceptionCaught(error);
+  }
+
+  @Override
+  public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+    setConnection(connectionFactory.apply(ctx));
   }
 
   /**
@@ -73,31 +128,10 @@ public abstract class   VertxHandler<C extends ConnectionBase> extends ChannelDu
     return conn;
   }
 
-  public static ByteBuf safeBuffer(ByteBuf buf, ByteBufAllocator allocator) {
-    if (buf == Unpooled.EMPTY_BUFFER) {
-      return buf;
-    }
-    if (buf.isDirect() || buf instanceof CompositeByteBuf) {
-      try {
-        if (buf.isReadable()) {
-          ByteBuf buffer =  allocator.heapBuffer(buf.readableBytes());
-          buffer.writeBytes(buf);
-          return buffer;
-        } else {
-          return Unpooled.EMPTY_BUFFER;
-        }
-      } finally {
-        buf.release();
-      }
-    }
-    return buf;
-  }
-
   @Override
   public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
     C conn = getConnection();
-    ContextImpl context = conn.getContext();
-    context.executeFromIO(conn::handleInterestedOpsChanged);
+    context.schedule(v -> conn.handleInterestedOpsChanged());
   }
 
   @Override
@@ -106,8 +140,7 @@ public abstract class   VertxHandler<C extends ConnectionBase> extends ChannelDu
     // Don't remove the connection at this point, or the handleClosed won't be called when channelInactive is called!
     C connection = getConnection();
     if (connection != null) {
-      ContextImpl context = conn.getContext();
-      context.executeFromIO(() -> {
+      context.executeFromIO(v -> {
         try {
           if (ch.isOpen()) {
             ch.close();
@@ -126,42 +159,26 @@ public abstract class   VertxHandler<C extends ConnectionBase> extends ChannelDu
     if (removeHandler != null) {
       removeHandler.handle(conn);
     }
-    ContextImpl context = conn.getContext();
-    context.executeFromIO(conn::handleClosed);
+    context.schedule(v -> conn.handleClosed());
   }
 
   @Override
   public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-    ContextImpl context = conn.getContext();
-    context.executeFromIO(endReadAndFlush);
+    conn.endReadAndFlush();
   }
 
   @Override
   public void channelRead(ChannelHandlerContext chctx, Object msg) throws Exception {
-    Object message = decode(msg, chctx.alloc());
-    ContextImpl context;
-    context = conn.getContext();
-    context.executeFromIO(() -> {
-      conn.startRead();
-      handleMessage(conn, context, chctx, message);
-    });
+    conn.setRead();
+    context.schedule(msg, messageHandler);
   }
 
   @Override
   public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
     if (evt instanceof IdleStateEvent && ((IdleStateEvent) evt).state() == IdleState.ALL_IDLE) {
-      ctx.close();
+      context.schedule(v -> conn.handleIdle());
+    } else {
+      ctx.fireUserEventTriggered(evt);
     }
-    ctx.fireUserEventTriggered(evt);
   }
-
-  protected abstract void handleMessage(C connection, ContextImpl context, ChannelHandlerContext chctx, Object msg) throws Exception;
-
-  /**
-   * Decode the message before passing it to the channel
-   *
-   * @param msg the message to decode
-   * @return the decoded message
-   */
-  protected abstract Object decode(Object msg, ByteBufAllocator allocator) throws Exception;
 }

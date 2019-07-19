@@ -19,8 +19,8 @@ import io.vertx.core.dns.AddressResolverOptions;
 import io.vertx.core.impl.VertxImpl;
 import io.vertx.core.impl.resolver.DnsResolverProvider;
 import io.vertx.core.impl.resolver.DefaultResolverProvider;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 
 import java.net.InetSocketAddress;
 
@@ -30,13 +30,12 @@ import java.net.InetSocketAddress;
 public interface ResolverProvider {
 
   String DISABLE_DNS_RESOLVER_PROP_NAME = "vertx.disableDnsResolver";
-  boolean DISABLE_DNS_RESOLVER = Boolean.getBoolean(DISABLE_DNS_RESOLVER_PROP_NAME);
 
   static ResolverProvider factory(Vertx vertx, AddressResolverOptions options) {
     // For now not really plugable, we just want to not fail when we can't load the async provider
     // that use an unstable API and fallback on the default (blocking) provider
     try {
-      if (!DISABLE_DNS_RESOLVER) {
+      if (!Boolean.getBoolean(DISABLE_DNS_RESOLVER_PROP_NAME)) {
         return new DnsResolverProvider((VertxImpl) vertx, options);
       }
     } catch (Throwable e) {

@@ -15,7 +15,6 @@ import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.WebSocket;
 import io.vertx.core.http.WebSocketBase;
-import io.vertx.core.metrics.Measured;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
 
@@ -23,6 +22,8 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
+import static org.junit.Assert.assertNotNull;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -34,8 +35,7 @@ public class FakeHttpClientMetrics extends FakeMetricsBase implements HttpClient
   private final ConcurrentMap<HttpClientRequest, HttpClientMetric> requests = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, EndpointMetric> endpoints = new ConcurrentHashMap<>();
 
-  public FakeHttpClientMetrics(Measured measured, String name) {
-    super(measured);
+  public FakeHttpClientMetrics(String name) {
     this.name = name;
   }
 
@@ -129,6 +129,7 @@ public class FakeHttpClientMetrics extends FakeMetricsBase implements HttpClient
 
   @Override
   public void responseBegin(HttpClientMetric requestMetric, HttpClientResponse response) {
+    assertNotNull(response);
     requestMetric.responseBegin.incrementAndGet();
   }
 
@@ -173,11 +174,6 @@ public class FakeHttpClientMetrics extends FakeMetricsBase implements HttpClient
 
   @Override
   public void exceptionOccurred(SocketMetric socketMetric, SocketAddress remoteAddress, Throwable t) {
-  }
-
-  @Override
-  public boolean isEnabled() {
-    return true;
   }
 
 }

@@ -14,6 +14,7 @@ package io.vertx.core.eventbus;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.streams.WriteStream;
 
@@ -28,21 +29,8 @@ public interface MessageProducer<T> extends WriteStream<T> {
 
   int DEFAULT_WRITE_QUEUE_MAX_SIZE = 1000;
 
-  /**
-   * Synonym for {@link #write(Object)}.
-   *
-   * @param message  the message to send
-   * @return  reference to this for fluency
-   */
-  MessageProducer<T> send(T message);
-
-  <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler);
-
   @Override
   MessageProducer<T> exceptionHandler(Handler<Throwable> handler);
-
-  @Override
-  MessageProducer<T> write(T data);
 
   @Override
   MessageProducer<T> setWriteQueueMaxSize(int maxSize);
@@ -66,12 +54,27 @@ public interface MessageProducer<T> extends WriteStream<T> {
 
   /**
    * Closes the producer, calls {@link #close()}
+   *
+   * @return a future completed with the result
    */
   @Override
-  void end();
+  Future<Void> end();
+
+  /**
+   * Closes the producer, calls {@link #close(Handler)}
+   */
+  @Override
+  void end(Handler<AsyncResult<Void>> handler);
 
   /**
    * Closes the producer, this method should be called when the message producer is not used anymore.
+   *
+   * @return a future completed with the result
    */
-  void close();
+  Future<Void> close();
+
+  /**
+   * Same as {@link #close()} but with an {@code handler} called when the operation completes
+   */
+  void close(Handler<AsyncResult<Void>> handler);
 }

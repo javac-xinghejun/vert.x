@@ -1,44 +1,52 @@
-/*
- * Copyright (c) 2014 Red Hat, Inc. and others
- *
- * Red Hat licenses this file to you under the Apache License, version 2.0
- * (the "License"); you may not use this file except in compliance with the
- * License.  You may obtain a copy of the License at:
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
- * License for the specific language governing permissions and limitations
- * under the License.
- */
-
 package io.vertx.core.net;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import io.vertx.core.spi.json.JsonCodec;
 
 /**
- * Converter for {@link io.vertx.core.net.JksOptions}.
- *
+ * Converter and Codec for {@link io.vertx.core.net.JksOptions}.
  * NOTE: This class has been automatically generated from the {@link io.vertx.core.net.JksOptions} original class using Vert.x codegen.
  */
-public class JksOptionsConverter {
+public class JksOptionsConverter implements JsonCodec<JksOptions, JsonObject> {
 
-  public static void fromJson(JsonObject json, JksOptions obj) {
-    if (json.getValue("password") instanceof String) {
-      obj.setPassword((String)json.getValue("password"));
-    }
-    if (json.getValue("path") instanceof String) {
-      obj.setPath((String)json.getValue("path"));
-    }
-    if (json.getValue("value") instanceof String) {
-      obj.setValue(io.vertx.core.buffer.Buffer.buffer(java.util.Base64.getDecoder().decode((String)json.getValue("value"))));
+  public static final JksOptionsConverter INSTANCE = new JksOptionsConverter();
+
+  @Override public JsonObject encode(JksOptions value) { return (value != null) ? value.toJson() : null; }
+
+  @Override public JksOptions decode(JsonObject value) { return (value != null) ? new JksOptions(value) : null; }
+
+  @Override public Class<JksOptions> getTargetClass() { return JksOptions.class; }
+
+  public static void fromJson(Iterable<java.util.Map.Entry<String, Object>> json, JksOptions obj) {
+    for (java.util.Map.Entry<String, Object> member : json) {
+      switch (member.getKey()) {
+        case "password":
+          if (member.getValue() instanceof String) {
+            obj.setPassword((String)member.getValue());
+          }
+          break;
+        case "path":
+          if (member.getValue() instanceof String) {
+            obj.setPath((String)member.getValue());
+          }
+          break;
+        case "value":
+          if (member.getValue() instanceof String) {
+            obj.setValue(io.vertx.core.buffer.Buffer.buffer(java.util.Base64.getDecoder().decode((String)member.getValue())));
+          }
+          break;
+      }
     }
   }
 
   public static void toJson(JksOptions obj, JsonObject json) {
+    toJson(obj, json.getMap());
+  }
+
+  public static void toJson(JksOptions obj, java.util.Map<String, Object> json) {
     if (obj.getPassword() != null) {
       json.put("password", obj.getPassword());
     }
@@ -46,7 +54,7 @@ public class JksOptionsConverter {
       json.put("path", obj.getPath());
     }
     if (obj.getValue() != null) {
-      json.put("value", obj.getValue().getBytes());
+      json.put("value", java.util.Base64.getEncoder().encodeToString(obj.getValue().getBytes()));
     }
   }
 }

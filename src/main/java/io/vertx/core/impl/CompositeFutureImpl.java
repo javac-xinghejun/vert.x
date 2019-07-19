@@ -21,7 +21,7 @@ import java.util.function.Function;
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-public class CompositeFutureImpl implements CompositeFuture, Handler<AsyncResult<CompositeFuture>> {
+public class CompositeFutureImpl implements CompositeFuture {
 
   private static final Handler<AsyncResult<CompositeFuture>> NO_HANDLER = c -> {};
 
@@ -150,6 +150,11 @@ public class CompositeFutureImpl implements CompositeFuture, Handler<AsyncResult
   }
 
   @Override
+  public synchronized Handler<AsyncResult<CompositeFuture>> getHandler() {
+    return this.handler;
+  }
+
+  @Override
   public Throwable cause(int index) {
     return future(index).cause();
   }
@@ -211,66 +216,6 @@ public class CompositeFutureImpl implements CompositeFuture, Handler<AsyncResult
     return completed && cause == null ? this : null;
   }
 
-  @Override
-  public void complete() {
-    if (!tryComplete()) {
-      throw new IllegalStateException("Result is already complete: " + (this.cause == null ? "succeeded" : "failed"));
-    }
-  }
-
-  @Override
-  public void complete(CompositeFuture result) {
-    if (!tryComplete(result)) {
-      throw new IllegalStateException("Result is already complete: " + (this.cause == null ? "succeeded" : "failed"));
-    }
-  }
-
-  @Override
-  public void fail(Throwable cause) {
-    if (!tryFail(cause)) {
-      throw new IllegalStateException("Result is already complete: " + (this.cause == null ? "succeeded" : "failed"));
-    }
-  }
-
-  @Override
-  public void fail(String failureMessage) {
-    if (!tryFail(failureMessage)) {
-      throw new IllegalStateException("Result is already complete: " + (this.cause == null ? "succeeded" : "failed"));
-    }
-  }
-
-  @Override
-  public boolean tryComplete(CompositeFuture result) {
-    Handler<AsyncResult<CompositeFuture>> handler = setCompleted(null);
-    if (handler != null) {
-      handler.handle(this);
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  @Override
-  public boolean tryComplete() {
-    return tryComplete(this);
-  }
-
-  @Override
-  public boolean tryFail(Throwable cause) {
-    Handler<AsyncResult<CompositeFuture>> handler = setCompleted(cause);
-    if (handler != null) {
-      handler.handle(this);
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  @Override
-  public boolean tryFail(String failureMessage) {
-    return tryFail(new NoStackTraceThrowable(failureMessage));
-  }
-
   private Handler<AsyncResult<CompositeFuture>> setCompleted(Throwable cause) {
     synchronized (this) {
       if (completed) {
@@ -279,20 +224,6 @@ public class CompositeFutureImpl implements CompositeFuture, Handler<AsyncResult
       this.completed = true;
       this.cause = cause;
       return handler != null ? handler : NO_HANDLER;
-    }
-  }
-
-  @Override
-  public Handler<AsyncResult<CompositeFuture>> completer() {
-    return this;
-  }
-
-  @Override
-  public void handle(AsyncResult<CompositeFuture> asyncResult) {
-    if (asyncResult.succeeded()) {
-      complete(this);
-    } else {
-      fail(asyncResult.cause());
     }
   }
 }

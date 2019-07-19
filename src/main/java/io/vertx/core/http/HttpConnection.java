@@ -11,12 +11,9 @@
 
 package io.vertx.core.http;
 
-import io.vertx.codegen.annotations.CacheReturn;
-import io.vertx.codegen.annotations.Fluent;
-import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.Nullable;
-import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.codegen.annotations.*;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.net.SocketAddress;
@@ -155,8 +152,10 @@ public interface HttpConnection {
    * Close the connection and all the currently active streams.
    * <p/>
    * An HTTP/2 connection will send a {@literal GOAWAY} frame before.
+   *
+   * @return a future completed with the result
    */
-  void close();
+  Future<Void> close();
 
   /**
    * @return the latest server settings acknowledged by the remote endpoint - this is not implemented for HTTP/1.x
@@ -169,10 +168,9 @@ public interface HttpConnection {
    * This is not implemented for HTTP/1.x.
    *
    * @param settings the new settings
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the result
    */
-  @Fluent
-  HttpConnection updateSettings(Http2Settings settings);
+  Future<Void> updateSettings(Http2Settings settings);
 
   /**
    * Send to the remote endpoint an update of this endpoint settings
@@ -217,6 +215,11 @@ public interface HttpConnection {
   HttpConnection ping(Buffer data, Handler<AsyncResult<Buffer>> pongHandler);
 
   /**
+   * Same as {@link #ping(Buffer, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<Buffer> ping(Buffer data);
+
+  /**
    * Set an handler notified when a {@literal PING} frame is received from the remote endpoint.
    * <p/>
    * This is not implemented for HTTP/1.x.
@@ -258,7 +261,7 @@ public interface HttpConnection {
    *         not SSL.
    * @see javax.net.ssl.SSLSession
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   SSLSession sslSession();
 
   /**

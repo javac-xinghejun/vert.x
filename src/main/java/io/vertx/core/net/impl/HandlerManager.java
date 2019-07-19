@@ -12,15 +12,15 @@
 package io.vertx.core.net.impl;
 
 import io.netty.channel.EventLoop;
-import io.vertx.core.Handler;
-import io.vertx.core.impl.ContextImpl;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -45,12 +45,19 @@ public class HandlerManager<T> {
     return hasHandlers;
   }
 
+  public synchronized List<T> handlers() {
+    return handlerMap.values().stream()
+      .flatMap(handlers -> handlers.list.stream())
+      .map(holder -> holder.handler)
+      .collect(Collectors.toList());
+  }
+
   public HandlerHolder<T> chooseHandler(EventLoop worker) {
     Handlers<T> handlers = handlerMap.get(worker);
     return handlers == null ? null : handlers.chooseHandler();
   }
 
-  public synchronized void addHandler(T handler, ContextImpl context) {
+  public synchronized void addHandler(T handler, ContextInternal context) {
     EventLoop worker = context.nettyEventLoop();
     availableWorkers.addWorker(worker);
     Handlers<T> handlers = new Handlers<>();
@@ -62,7 +69,7 @@ public class HandlerManager<T> {
     hasHandlers = true;
   }
 
-  public synchronized void removeHandler(T handler, ContextImpl context) {
+  public synchronized void removeHandler(T handler, ContextInternal context) {
     EventLoop worker = context.nettyEventLoop();
     Handlers<T> handlers = handlerMap.get(worker);
     if (!handlers.removeHandler(new HandlerHolder<>(context, handler))) {

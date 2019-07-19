@@ -13,15 +13,18 @@ package io.vertx.core.json;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import io.netty.buffer.ByteBufInputStream;
 import io.vertx.core.buffer.Buffer;
 
-import java.io.DataInput;
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Iterator;
@@ -53,7 +56,9 @@ public class Json {
     module.addSerializer(JsonArray.class, new JsonArraySerializer());
     // he have 2 extensions: RFC-7493
     module.addSerializer(Instant.class, new InstantSerializer());
+    module.addDeserializer(Instant.class, new InstantDeserializer());
     module.addSerializer(byte[].class, new ByteArraySerializer());
+    module.addDeserializer(byte[].class, new ByteArrayDeserializer());
 
     mapper.registerModule(module);
     prettyMapper.registerModule(module);
@@ -121,6 +126,31 @@ public class Json {
   }
 
   /**
+   * Decode a given JSON string.
+   *
+   * @param str the JSON string.
+   *
+   * @return a JSON element which can be a {@link JsonArray}, {@link JsonObject}, {@link String}, ...etc if the content is an array, object, string, ...etc
+   * @throws DecodeException when there is a parsing or invalid mapping.
+   */
+  public static Object decodeValue(String str) throws DecodeException {
+    try {
+      Object value = mapper.readValue(str, Object.class);
+      if (value instanceof List) {
+        List list = (List) value;
+        return new JsonArray(list);
+      } else if (value instanceof Map) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) value;
+        return new JsonObject(map);
+      }
+      return value;
+    } catch (Exception e) {
+      throw new DecodeException("Failed to decode: " + e.getMessage());
+    }
+  }
+
+  /**
    * Decode a given JSON string to a POJO of the given type.
    * @param str the JSON string.
    * @param type the type to map to.
@@ -133,6 +163,31 @@ public class Json {
       return mapper.readValue(str, type);
     } catch (Exception e) {
       throw new DecodeException("Failed to decode: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Decode a given JSON buffer.
+   *
+   * @param buf the JSON buffer.
+   *
+   * @return a JSON element which can be a {@link JsonArray}, {@link JsonObject}, {@link String}, ...etc if the buffer contains an array, object, string, ...etc
+   * @throws DecodeException when there is a parsing or invalid mapping.
+   */
+  public static Object decodeValue(Buffer buf) throws DecodeException {
+    try {
+      Object value = mapper.readValue((InputStream) new ByteBufInputStream(buf.getByteBuf()), Object.class);
+      if (value instanceof List) {
+        List list = (List) value;
+        return new JsonArray(list);
+      } else if (value instanceof Map) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) value;
+        return new JsonObject(map);
+      }
+      return value;
+    } catch (Exception e) {
+      throw new DecodeException("Failed to decode: " + e.getMessage());
     }
   }
 
@@ -162,7 +217,7 @@ public class Json {
    */
   public static <T> T decodeValue(Buffer buf, Class<T> clazz) throws DecodeException {
     try {
-      return mapper.readValue((DataInput) new ByteBufInputStream(buf.getByteBuf()), clazz);
+      return mapper.readValue((InputStream) new ByteBufInputStream(buf.getByteBuf()), clazz);
     } catch (Exception e) {
       throw new DecodeException("Failed to decode:" + e.getMessage(), e);
     }
@@ -238,12 +293,36 @@ public class Json {
     }
   }
 
+  private static class InstantDeserializer extends JsonDeserializer<Instant> {
+    @Override
+    public Instant deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+      String text = p.getText();
+      try {
+        return Instant.from(ISO_INSTANT.parse(text));
+      } catch (DateTimeException e) {
+        throw new InvalidFormatException(p, "Expected an ISO 8601 formatted date time", text, Instant.class);
+      }
+    }
+  }
+
   private static class ByteArraySerializer extends JsonSerializer<byte[]> {
-    private final Base64.Encoder BASE64 = Base64.getEncoder();
 
     @Override
     public void serialize(byte[] value, JsonGenerator jgen, SerializerProvider provider) throws IOException {
-      jgen.writeString(BASE64.encodeToString(value));
+      jgen.writeString(Base64.getEncoder().encodeToString(value));
+    }
+  }
+
+  private static class ByteArrayDeserializer extends JsonDeserializer<byte[]> {
+
+    @Override
+    public byte[] deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+      String text = p.getText();
+      try {
+        return Base64.getDecoder().decode(text);
+      } catch (IllegalArgumentException e) {
+        throw new InvalidFormatException(p, "Expected a base64 encoded byte array", text, Instant.class);
+      }
     }
   }
 }

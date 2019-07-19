@@ -13,17 +13,16 @@ package io.vertx.core.net.impl;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.logging.LoggingHandler;
-import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Closeable;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.Promise;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
@@ -36,9 +35,12 @@ import io.vertx.core.spi.metrics.MetricsProvider;
 import io.vertx.core.spi.metrics.TCPMetrics;
 import io.vertx.core.spi.metrics.VertxMetrics;
 
+import java.io.FileNotFoundException;
+import java.net.ConnectException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  *
@@ -50,6 +52,7 @@ public class NetClientImpl implements MetricsProvider, NetClient {
 
   private static final Logger log = LoggerFactory.getLogger(NetClientImpl.class);
   protected final int idleTimeout;
+  private final TimeUnit idleTimeoutUnit;
   protected final boolean logEnabled;
 
   private final VertxInternal vertx;
@@ -57,7 +60,7 @@ public class NetClientImpl implements MetricsProvider, NetClient {
   protected final SSLHelper sslHelper;
   private final Map<Channel, NetSocketImpl> socketMap = new ConcurrentHashMap<>();
   private final Closeable closeHook;
-  private final ContextImpl creatingContext;
+  private final ContextInternal creatingContext;
   private final TCPMetrics metrics;
   private volatile boolean closed;
 
@@ -76,18 +79,16 @@ public class NetClientImpl implements MetricsProvider, NetClient {
     if (useCreatingContext) {
       creatingContext = vertx.getContext();
       if (creatingContext != null) {
-        if (creatingContext.isMultiThreadedWorkerContext()) {
-          throw new IllegalStateException("Cannot use NetClient in a multi-threaded worker verticle");
-        }
         creatingContext.addCloseHook(closeHook);
       }
     } else {
       creatingContext = null;
     }
     VertxMetrics metrics = vertx.metricsSPI();
-    this.metrics = metrics != null ? metrics.createMetrics(options) : null;
+    this.metrics = metrics != null ? metrics.createNetClientMetrics(options) : null;
     logEnabled = options.getLogActivity();
     idleTimeout = options.getIdleTimeout();
+    idleTimeoutUnit = options.getIdleTimeoutUnit();
   }
 
   protected void initChannel(ChannelPipeline pipeline) {
@@ -99,8 +100,36 @@ public class NetClientImpl implements MetricsProvider, NetClient {
       pipeline.addLast("chunkedWriter", new ChunkedWriteHandler());       // For large file / sendfile support
     }
     if (idleTimeout > 0) {
-      pipeline.addLast("idle", new IdleStateHandler(0, 0, idleTimeout));
+      pipeline.addLast("idle", new IdleStateHandler(0, 0, idleTimeout, idleTimeoutUnit));
     }
+  }
+
+  @Override
+  public Future<NetSocket> connect(int port, String host) {
+    Promise<NetSocket> promise = Promise.promise();
+    connect(port, host, promise);
+    return promise.future();
+  }
+
+  @Override
+  public Future<NetSocket> connect(int port, String host, String serverName) {
+    Promise<NetSocket> promise = Promise.promise();
+    connect(port, host, serverName, promise);
+    return promise.future();
+  }
+
+  @Override
+  public Future<NetSocket> connect(SocketAddress remoteAddress) {
+    Promise<NetSocket> promise = Promise.promise();
+    connect(remoteAddress, promise);
+    return promise.future();
+  }
+
+  @Override
+  public Future<NetSocket> connect(SocketAddress remoteAddress, String serverName) {
+    Promise<NetSocket> promise = Promise.promise();
+    connect(remoteAddress, serverName, promise);
+    return promise.future();
   }
 
   public synchronized NetClient connect(int port, String host, Handler<AsyncResult<NetSocket>> connectHandler) {
@@ -110,7 +139,7 @@ public class NetClientImpl implements MetricsProvider, NetClient {
 
   @Override
   public NetClient connect(int port, String host, String serverName, Handler<AsyncResult<NetSocket>> connectHandler) {
-    doConnect(SocketAddress.inetSocketAddress(port, host), serverName, connectHandler != null ? ar -> connectHandler.handle(ar.map(s -> (NetSocket) s)) : null);
+    doConnect(SocketAddress.inetSocketAddress(port, host), serverName, connectHandler);
     return this;
   }
 
@@ -131,7 +160,7 @@ public class NetClientImpl implements MetricsProvider, NetClient {
 
   @Override
   public boolean isMetricsEnabled() {
-    return metrics != null && metrics.isEnabled();
+    return metrics != null;
   }
 
   @Override
@@ -145,8 +174,8 @@ public class NetClientImpl implements MetricsProvider, NetClient {
     }
   }
 
-  private void applyConnectionOptions(Bootstrap bootstrap) {
-    vertx.transport().configure(options, bootstrap);
+  private void applyConnectionOptions(boolean domainSocket, Bootstrap bootstrap) {
+    vertx.transport().configure(options, domainSocket, bootstrap);
   }
 
   @Override
@@ -169,52 +198,26 @@ public class NetClientImpl implements MetricsProvider, NetClient {
                            int remainingAttempts) {
     checkClosed();
     Objects.requireNonNull(connectHandler, "No null connectHandler accepted");
-    ContextImpl context = vertx.getOrCreateContext();
+    ContextInternal context = vertx.getOrCreateContext();
     sslHelper.validate(vertx);
     Bootstrap bootstrap = new Bootstrap();
     bootstrap.group(context.nettyEventLoop());
-    bootstrap.channel(vertx.transport().channelType(remoteAddress.path() != null));
+    bootstrap.channelFactory(vertx.transport().channelFactory(remoteAddress.path() != null));
 
-    applyConnectionOptions(bootstrap);
+    applyConnectionOptions(remoteAddress.path() != null, bootstrap);
 
-    ChannelProvider channelProvider;
-    if (options.getProxyOptions() == null) {
-      channelProvider = ChannelProvider.INSTANCE;
-    } else {
-      channelProvider = ProxyChannelProvider.INSTANCE;
-    }
-
-    Handler<Channel> channelInitializer = ch -> {
-      if (sslHelper.isSSL()) {
-        SslHandler sslHandler = new SslHandler(sslHelper.createEngine(vertx, remoteAddress, serverName));
-        ch.pipeline().addLast("ssl", sslHandler);
-      }
-    };
+    ChannelProvider channelProvider = new ChannelProvider(bootstrap, sslHelper, context, options.getProxyOptions());
 
     Handler<AsyncResult<Channel>> channelHandler = res -> {
       if (res.succeeded()) {
-
         Channel ch = res.result();
-
-        if (sslHelper.isSSL()) {
-          // TCP connected, so now we must do the SSL handshake
-          SslHandler sslHandler = (SslHandler) ch.pipeline().get("ssl");
-
-          io.netty.util.concurrent.Future<Channel> fut = sslHandler.handshakeFuture();
-          fut.addListener(future2 -> {
-            if (future2.isSuccess()) {
-              connected(context, ch, connectHandler, remoteAddress);
-            } else {
-              failed(context, ch, future2.cause(), connectHandler);
-            }
-          });
-        } else {
-          connected(context, ch, connectHandler, remoteAddress);
-        }
-
+        connected(context, ch, connectHandler, remoteAddress);
       } else {
-        if (remainingAttempts > 0 || remainingAttempts == -1) {
-          context.executeFromIO(() -> {
+        Throwable cause = res.cause();
+        // FileNotFoundException for domain sockets
+        boolean connectError = cause instanceof ConnectException || cause instanceof FileNotFoundException;
+        if (connectError && (remainingAttempts > 0 || remainingAttempts == -1)) {
+          context.executeFromIO(v -> {
             log.debug("Failed to create connection. Will retry in " + options.getReconnectInterval() + " milliseconds");
             //Set a timer to retry connection
             vertx.setTimer(options.getReconnectInterval(), tid ->
@@ -222,32 +225,26 @@ public class NetClientImpl implements MetricsProvider, NetClient {
             );
           });
         } else {
-          failed(context, null, res.cause(), connectHandler);
+          failed(context, null, cause, connectHandler);
         }
       }
     };
 
-    channelProvider.connect(vertx, bootstrap, options.getProxyOptions(), remoteAddress, channelInitializer, channelHandler);
+    channelProvider.connect(remoteAddress, remoteAddress, serverName, sslHelper.isSSL(), channelHandler);
   }
 
-  private void connected(ContextImpl context, Channel ch, Handler<AsyncResult<NetSocket>> connectHandler, SocketAddress remoteAddress) {
+  private void connected(ContextInternal context, Channel ch, Handler<AsyncResult<NetSocket>> connectHandler, SocketAddress remoteAddress) {
 
-    // Need to set context before constructor is called as writehandler registration needs this
-    ContextImpl.setContext(context);
     initChannel(ch.pipeline());
 
-    VertxNetHandler handler = new VertxNetHandler(ctx -> new NetSocketImpl(vertx, ctx, remoteAddress, context, sslHelper, metrics)) {
-      @Override
-      protected void handleMessage(NetSocketImpl connection, ContextImpl context, ChannelHandlerContext chctx, Object msg) throws Exception {
-        connection.handleMessageReceived(msg);;
-      }
-    };
+    VertxHandler<NetSocketImpl> handler = VertxHandler.create(context, ctx -> new NetSocketImpl(vertx, ctx, remoteAddress, context, sslHelper, metrics));
     handler.addHandler(sock -> {
       socketMap.put(ch, sock);
-      context.executeFromIO(() -> {
+      context.executeFromIO(v -> {
         if (metrics != null) {
           sock.metric(metrics.connected(sock.remoteAddress(), sock.remoteName()));
         }
+        sock.registerEventBusHandler();
         connectHandler.handle(Future.succeededFuture(sock));
       });
     });
@@ -257,11 +254,11 @@ public class NetClientImpl implements MetricsProvider, NetClient {
     ch.pipeline().addLast("handler", handler);
   }
 
-  private void failed(ContextImpl context, Channel ch, Throwable th, Handler<AsyncResult<NetSocket>> connectHandler) {
+  private void failed(ContextInternal context, Channel ch, Throwable th, Handler<AsyncResult<NetSocket>> connectHandler) {
     if (ch != null) {
       ch.close();
     }
-    context.executeFromIO(() -> doFailed(connectHandler, th));
+    context.executeFromIO(v -> doFailed(connectHandler, th));
   }
 
   private void doFailed(Handler<AsyncResult<NetSocket>> connectHandler, Throwable th) {

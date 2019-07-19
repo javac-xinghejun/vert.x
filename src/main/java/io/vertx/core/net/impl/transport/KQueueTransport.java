@@ -11,22 +11,18 @@
 
 package io.vertx.core.net.impl.transport;
 
+import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelFactory;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
-import io.netty.channel.kqueue.KQueue;
-import io.netty.channel.kqueue.KQueueChannelOption;
-import io.netty.channel.kqueue.KQueueDatagramChannel;
-import io.netty.channel.kqueue.KQueueDomainSocketChannel;
-import io.netty.channel.kqueue.KQueueEventLoopGroup;
-import io.netty.channel.kqueue.KQueueServerDomainSocketChannel;
-import io.netty.channel.kqueue.KQueueServerSocketChannel;
-import io.netty.channel.kqueue.KQueueSocketChannel;
+import io.netty.channel.kqueue.*;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.InternetProtocolFamily;
-import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.unix.DomainSocketAddress;
+import io.vertx.core.datagram.DatagramSocketOptions;
+import io.vertx.core.net.NetServerOptions;
+import io.vertx.core.net.impl.SocketAddressImpl;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -54,6 +50,14 @@ class KQueueTransport extends Transport {
   }
 
   @Override
+  public io.vertx.core.net.SocketAddress convert(SocketAddress address) {
+    if (address instanceof DomainSocketAddress) {
+      return new SocketAddressImpl(((DomainSocketAddress) address).path());
+    }
+    return super.convert(address);
+  }
+
+  @Override
   public boolean isAvailable() {
     return KQueue.isAvailable();
   }
@@ -64,7 +68,7 @@ class KQueueTransport extends Transport {
   }
 
   @Override
-  public EventLoopGroup eventLoopGroup(int nThreads, ThreadFactory threadFactory, int ioRatio) {
+  public EventLoopGroup eventLoopGroup(int type, int nThreads, ThreadFactory threadFactory, int ioRatio) {
     KQueueEventLoopGroup eventLoopGroup = new KQueueEventLoopGroup(nThreads, threadFactory);
     eventLoopGroup.setIoRatio(ioRatio);
     return eventLoopGroup;
@@ -81,29 +85,34 @@ class KQueueTransport extends Transport {
   }
 
   @Override
-  public Class<? extends Channel> channelType(boolean domain) {
-    if (domain) {
-      return KQueueDomainSocketChannel.class;
+  public ChannelFactory<? extends Channel> channelFactory(boolean domainSocket) {
+    if (domainSocket) {
+      return KQueueDomainSocketChannel::new;
     } else {
-      return KQueueSocketChannel.class;
+      return KQueueSocketChannel::new;
     }
   }
 
   @Override
-  public Class<? extends ServerChannel> serverChannelType(boolean domain) {
-    if (domain) {
-      return KQueueServerDomainSocketChannel.class;
+  public ChannelFactory<? extends ServerChannel> serverChannelFactory(boolean domainSocket) {
+    if (domainSocket) {
+      return KQueueServerDomainSocketChannel::new;
     } else {
-      return KQueueServerSocketChannel.class;
+      return KQueueServerSocketChannel::new;
     }
   }
 
   @Override
-  public ChannelOption<?> channelOption(String name) {
-    switch (name) {
-      case "SO_REUSEPORT":
-        return KQueueChannelOption.SO_REUSEPORT;
+  public void configure(NetServerOptions options, boolean domainSocket, ServerBootstrap bootstrap) {
+    if (!domainSocket) {
+      bootstrap.option(KQueueChannelOption.SO_REUSEPORT, options.isReusePort());
     }
-    return null;
+    super.configure(options, domainSocket, bootstrap);
+  }
+
+  @Override
+  public void configure(DatagramChannel channel, DatagramSocketOptions options) {
+    channel.config().setOption(KQueueChannelOption.SO_REUSEPORT, options.isReusePort());
+    super.configure(channel, options);
   }
 }

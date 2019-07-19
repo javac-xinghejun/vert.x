@@ -17,6 +17,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Base class. TCP and SSL related options
@@ -42,11 +43,6 @@ public abstract class TCPSSLOptions extends NetworkOptions {
   public static final int DEFAULT_SO_LINGER = -1;
 
   /**
-   * The default value of Netty use pooled buffers = false
-   */
-  public static final boolean DEFAULT_USE_POOLED_BUFFERS = false;
-
-  /**
    * SSL enable by default = false
    */
   public static final boolean DEFAULT_SSL = false;
@@ -55,6 +51,11 @@ public abstract class TCPSSLOptions extends NetworkOptions {
    * Default idle timeout = 0
    */
   public static final int DEFAULT_IDLE_TIMEOUT = 0;
+
+  /**
+   * Default idle time unit = SECONDS
+   */
+  public static final TimeUnit DEFAULT_IDLE_TIMEOUT_TIME_UNIT = TimeUnit.SECONDS;
 
   /**
    * Default use alpn = false
@@ -90,12 +91,24 @@ public abstract class TCPSSLOptions extends NetworkOptions {
    */
   public static final boolean DEFAULT_TCP_QUICKACK = false;
 
+  /**
+   * The default value of SSL handshake timeout = 10
+   */
+  public static final long DEFAULT_SSL_HANDSHAKE_TIMEOUT = 10L;
+
+  /**
+   * Default SSL handshake time unit = SECONDS
+   */
+  public static final TimeUnit DEFAULT_SSL_HANDSHAKE_TIMEOUT_TIME_UNIT = TimeUnit.SECONDS;
+
   private boolean tcpNoDelay;
   private boolean tcpKeepAlive;
   private int soLinger;
-  private boolean usePooledBuffers;
   private int idleTimeout;
+  private TimeUnit idleTimeoutUnit;
   private boolean ssl;
+  private long sslHandshakeTimeout;
+  private TimeUnit sslHandshakeTimeoutUnit;
   private KeyCertOptions keyCertOptions;
   private TrustOptions trustOptions;
   private Set<String> enabledCipherSuites;
@@ -126,16 +139,18 @@ public abstract class TCPSSLOptions extends NetworkOptions {
     this.tcpNoDelay = other.isTcpNoDelay();
     this.tcpKeepAlive = other.isTcpKeepAlive();
     this.soLinger = other.getSoLinger();
-    this.usePooledBuffers = other.isUsePooledBuffers();
     this.idleTimeout = other.getIdleTimeout();
+    this.idleTimeoutUnit = other.getIdleTimeoutUnit() != null ? other.getIdleTimeoutUnit() : DEFAULT_IDLE_TIMEOUT_TIME_UNIT;
     this.ssl = other.isSsl();
-    this.keyCertOptions = other.getKeyCertOptions() != null ? other.getKeyCertOptions().clone() : null;
-    this.trustOptions = other.getTrustOptions() != null ? other.getTrustOptions().clone() : null;
+    this.sslHandshakeTimeout = other.sslHandshakeTimeout;
+    this.sslHandshakeTimeoutUnit = other.getSslHandshakeTimeoutUnit() != null ? other.getSslHandshakeTimeoutUnit() : DEFAULT_SSL_HANDSHAKE_TIMEOUT_TIME_UNIT;
+    this.keyCertOptions = other.getKeyCertOptions() != null ? other.getKeyCertOptions().copy() : null;
+    this.trustOptions = other.getTrustOptions() != null ? other.getTrustOptions().copy() : null;
     this.enabledCipherSuites = other.getEnabledCipherSuites() == null ? new LinkedHashSet<>() : new LinkedHashSet<>(other.getEnabledCipherSuites());
     this.crlPaths = new ArrayList<>(other.getCrlPaths());
     this.crlValues = new ArrayList<>(other.getCrlValues());
     this.useAlpn = other.useAlpn;
-    this.sslEngineOptions = other.sslEngineOptions != null ? other.sslEngineOptions.clone() : null;
+    this.sslEngineOptions = other.sslEngineOptions != null ? other.sslEngineOptions.copy() : null;
     this.enabledSecureTransportProtocols = other.getEnabledSecureTransportProtocols() == null ? new LinkedHashSet<>() : new LinkedHashSet<>(other.getEnabledSecureTransportProtocols());
     this.tcpFastOpen = other.isTcpFastOpen();
     this.tcpCork = other.isTcpCork();
@@ -168,9 +183,11 @@ public abstract class TCPSSLOptions extends NetworkOptions {
     tcpNoDelay = DEFAULT_TCP_NO_DELAY;
     tcpKeepAlive = DEFAULT_TCP_KEEP_ALIVE;
     soLinger = DEFAULT_SO_LINGER;
-    usePooledBuffers = DEFAULT_USE_POOLED_BUFFERS;
     idleTimeout = DEFAULT_IDLE_TIMEOUT;
+    idleTimeoutUnit = DEFAULT_IDLE_TIMEOUT_TIME_UNIT;
     ssl = DEFAULT_SSL;
+    sslHandshakeTimeout = DEFAULT_SSL_HANDSHAKE_TIMEOUT;
+    sslHandshakeTimeoutUnit = DEFAULT_SSL_HANDSHAKE_TIMEOUT_TIME_UNIT;
     enabledCipherSuites = new LinkedHashSet<>();
     crlPaths = new ArrayList<>();
     crlValues = new ArrayList<>();
@@ -241,27 +258,10 @@ public abstract class TCPSSLOptions extends NetworkOptions {
   }
 
   /**
-   * @return are Netty pooled buffers enabled?
-   *
-   */
-  public boolean isUsePooledBuffers() {
-    return usePooledBuffers;
-  }
-
-  /**
-   * Set whether Netty pooled buffers are enabled
-   *
-   * @param usePooledBuffers true if pooled buffers enabled
-   * @return a reference to this, so the API can be used fluently
-   */
-  public TCPSSLOptions setUsePooledBuffers(boolean usePooledBuffers) {
-    this.usePooledBuffers = usePooledBuffers;
-    return this;
-  }
-
-  /**
-   * Set the idle timeout, in seconds. zero means don't timeout.
+   * Set the idle timeout, default time unit is seconds. Zero means don't timeout.
    * This determines if a connection will timeout and be closed if no data is received within the timeout.
+   *
+   * If you want change default time unit, use {@link #setIdleTimeoutUnit(TimeUnit)}
    *
    * @param idleTimeout  the timeout, in seconds
    * @return a reference to this, so the API can be used fluently
@@ -275,10 +275,28 @@ public abstract class TCPSSLOptions extends NetworkOptions {
   }
 
   /**
-   * @return  the idle timeout, in seconds
+   * @return the idle timeout, in time unit specified by {@link #getIdleTimeoutUnit()}.
    */
   public int getIdleTimeout() {
     return idleTimeout;
+  }
+
+  /**
+   * Set the idle timeout unit. If not specified, default is seconds.
+   *
+   * @param idleTimeoutUnit specify time unit.
+   * @return a reference to this, so the API can be used fluently
+   */
+  public TCPSSLOptions setIdleTimeoutUnit(TimeUnit idleTimeoutUnit) {
+    this.idleTimeoutUnit = idleTimeoutUnit;
+    return this;
+  }
+
+  /**
+   * @return the idle timeout unit.
+   */
+  public TimeUnit getIdleTimeoutUnit() {
+    return idleTimeoutUnit;
   }
 
   /**
@@ -655,6 +673,45 @@ public abstract class TCPSSLOptions extends NetworkOptions {
     return new LinkedHashSet<>(enabledSecureTransportProtocols);
   }
 
+  /**
+   * @return the SSL handshake timeout, in time unit specified by {@link #getSslHandshakeTimeoutUnit()}.
+   */
+  public long getSslHandshakeTimeout() {
+    return sslHandshakeTimeout;
+  }
+
+  /**
+   * Set the SSL handshake timeout, default time unit is seconds.
+   *
+   * @param sslHandshakeTimeout the SSL handshake timeout to set, in milliseconds
+   * @return a reference to this, so the API can be used fluently
+   */
+  public TCPSSLOptions setSslHandshakeTimeout(long sslHandshakeTimeout) {
+    if (sslHandshakeTimeout < 0) {
+      throw new IllegalArgumentException("sslHandshakeTimeout must be >= 0");
+    }
+    this.sslHandshakeTimeout = sslHandshakeTimeout;
+    return this;
+  }
+
+  /**
+   * Set the SSL handshake timeout unit. If not specified, default is seconds.
+   *
+   * @param sslHandshakeTimeoutUnit specify time unit.
+   * @return a reference to this, so the API can be used fluently
+   */
+  public TCPSSLOptions setSslHandshakeTimeoutUnit(TimeUnit sslHandshakeTimeoutUnit) {
+    this.sslHandshakeTimeoutUnit = sslHandshakeTimeoutUnit;
+    return this;
+  }
+
+  /**
+   * @return the SSL handshake timeout unit.
+   */
+  public TimeUnit getSslHandshakeTimeoutUnit() {
+    return sslHandshakeTimeoutUnit;
+  }
+
   @Override
   public TCPSSLOptions setLogActivity(boolean logEnabled) {
     return (TCPSSLOptions) super.setLogActivity(logEnabled);
@@ -685,57 +742,4 @@ public abstract class TCPSSLOptions extends NetworkOptions {
     return (TCPSSLOptions) super.setReusePort(reusePort);
   }
 
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) return true;
-    if (!(o instanceof TCPSSLOptions)) return false;
-    if (!super.equals(o)) return false;
-
-    TCPSSLOptions that = (TCPSSLOptions) o;
-
-    if (idleTimeout != that.idleTimeout) return false;
-    if (soLinger != that.soLinger) return false;
-    if (ssl != that.ssl) return false;
-    if (tcpKeepAlive != that.tcpKeepAlive) return false;
-    if (tcpNoDelay != that.tcpNoDelay) return false;
-    if (tcpFastOpen != that.tcpFastOpen) return false;
-    if (tcpQuickAck != that.tcpQuickAck) return false;
-    if (tcpCork != that.tcpCork) return false;
-    if (usePooledBuffers != that.usePooledBuffers) return false;
-    if (crlPaths != null ? !crlPaths.equals(that.crlPaths) : that.crlPaths != null) return false;
-    if (crlValues != null ? !crlValues.equals(that.crlValues) : that.crlValues != null) return false;
-    if (enabledCipherSuites != null ? !enabledCipherSuites.equals(that.enabledCipherSuites) : that.enabledCipherSuites != null)
-      return false;
-    if (keyCertOptions != null ? !keyCertOptions.equals(that.keyCertOptions) : that.keyCertOptions != null) return false;
-    if (trustOptions != null ? !trustOptions.equals(that.trustOptions) : that.trustOptions != null) return false;
-    if (useAlpn != that.useAlpn) return false;
-    if (sslEngineOptions != null ? !sslEngineOptions.equals(that.sslEngineOptions) : that.sslEngineOptions != null) return false;
-    if (!enabledSecureTransportProtocols.equals(that.enabledSecureTransportProtocols)) return false;
-
-    return true;
-  }
-
-  @Override
-  public int hashCode() {
-    int result = super.hashCode();
-    result = 31 * result + (tcpNoDelay ? 1 : 0);
-    result = 31 * result + (tcpFastOpen ? 1 : 0);
-    result = 31 * result + (tcpCork ? 1 : 0);
-    result = 31 * result + (tcpQuickAck ? 1 : 0);
-    result = 31 * result + (tcpKeepAlive ? 1 : 0);
-    result = 31 * result + soLinger;
-    result = 31 * result + (usePooledBuffers ? 1 : 0);
-    result = 31 * result + idleTimeout;
-    result = 31 * result + (ssl ? 1 : 0);
-    result = 31 * result + (keyCertOptions != null ? keyCertOptions.hashCode() : 0);
-    result = 31 * result + (trustOptions != null ? trustOptions.hashCode() : 0);
-    result = 31 * result + (enabledCipherSuites != null ? enabledCipherSuites.hashCode() : 0);
-    result = 31 * result + (crlPaths != null ? crlPaths.hashCode() : 0);
-    result = 31 * result + (crlValues != null ? crlValues.hashCode() : 0);
-    result = 31 * result + (useAlpn ? 1 : 0);
-    result = 31 * result + (sslEngineOptions != null ? sslEngineOptions.hashCode() : 0);
-    result = 31 * result + (enabledSecureTransportProtocols != null ? enabledSecureTransportProtocols
-        .hashCode() : 0);
-    return result;
-  }
 }

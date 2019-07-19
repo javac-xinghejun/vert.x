@@ -16,6 +16,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Base class for Client options
@@ -217,13 +218,13 @@ public abstract class ClientOptionsBase extends TCPSSLOptions {
   }
 
   @Override
-  public ClientOptionsBase setUsePooledBuffers(boolean usePooledBuffers) {
-    return (ClientOptionsBase) super.setUsePooledBuffers(usePooledBuffers);
+  public ClientOptionsBase setIdleTimeout(int idleTimeout) {
+    return (ClientOptionsBase) super.setIdleTimeout(idleTimeout);
   }
 
   @Override
-  public ClientOptionsBase setIdleTimeout(int idleTimeout) {
-    return (ClientOptionsBase) super.setIdleTimeout(idleTimeout);
+  public ClientOptionsBase setIdleTimeoutUnit(TimeUnit idleTimeoutUnit) {
+    return (ClientOptionsBase) super.setIdleTimeoutUnit(idleTimeoutUnit);
   }
 
   @Override
@@ -354,33 +355,5 @@ public abstract class ClientOptionsBase extends TCPSSLOptions {
   @Override
   public ClientOptionsBase setTcpQuickAck(boolean tcpQuickAck) {
     return (ClientOptionsBase) super.setTcpQuickAck(tcpQuickAck);
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) return true;
-    if (!(o instanceof ClientOptionsBase)) return false;
-    if (!super.equals(o)) return false;
-
-    ClientOptionsBase that = (ClientOptionsBase) o;
-
-    if (connectTimeout != that.connectTimeout) return false;
-    if (trustAll != that.trustAll) return false;
-    if (!Objects.equals(metricsName, that.metricsName)) return false;
-    if (!Objects.equals(proxyOptions, that.proxyOptions)) return false;
-    if (!Objects.equals(localAddress, that.localAddress)) return false;
-
-    return true;
-  }
-
-  @Override
-  public int hashCode() {
-    int result = super.hashCode();
-    result = 31 * result + connectTimeout;
-    result = 31 * result + (trustAll ? 1 : 0);
-    result = 31 * result + (metricsName != null ? metricsName.hashCode() : 0);
-    result = 31 * result + (proxyOptions != null ? proxyOptions.hashCode() : 0);
-    result = 31 * result + (localAddress != null ? localAddress.hashCode() : 0);
-    return result;
   }
 }

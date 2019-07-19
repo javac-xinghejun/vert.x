@@ -13,7 +13,6 @@ package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -27,11 +26,14 @@ import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
 import io.vertx.core.http.impl.pool.ConnectionListener;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.net.NetSocket;
+import io.vertx.core.net.impl.ConnectionBase;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
+import io.vertx.core.spi.tracing.VertxTracer;
 
-import java.util.Map;
+import java.util.*;
+import java.util.function.BiConsumer;
 
 import static io.vertx.core.http.HttpHeaders.DEFLATE_GZIP;
 
@@ -42,13 +44,13 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
 
   private final ConnectionListener<HttpClientConnection> listener;
   private final HttpClientImpl client;
-  final HttpClientMetrics metrics;
-  final Object queueMetric;
+  private final HttpClientMetrics metrics;
+  private final Object queueMetric;
 
-  public Http2ClientConnection(ConnectionListener<HttpClientConnection> listener,
+  Http2ClientConnection(ConnectionListener<HttpClientConnection> listener,
                                Object queueMetric,
                                HttpClientImpl client,
-                               ContextImpl context,
+                               ContextInternal context,
                                VertxHttp2ConnectionHandler connHandler,
                                HttpClientMetrics metrics) {
     super(context, connHandler);
@@ -59,20 +61,21 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
   }
 
   @Override
-  synchronized void onGoAwaySent(int lastStreamId, long errorCode, ByteBuf debugData) {
-    listener.onDiscard();
-    super.onGoAwaySent(lastStreamId, errorCode, debugData);
+  synchronized boolean onGoAwaySent(int lastStreamId, long errorCode, ByteBuf debugData) {
+    boolean goneAway = super.onGoAwaySent(lastStreamId, errorCode, debugData);
+    if (goneAway) {
+      listener.onEvict();
+    }
+    return goneAway;
   }
 
   @Override
-  synchronized void onGoAwayReceived(int lastStreamId, long errorCode, ByteBuf debugData) {
-    listener.onDiscard();
-    super.onGoAwayReceived(lastStreamId, errorCode, debugData);
-  }
-
-  @Override
-  public Channel channel() {
-    return chctx.channel();
+  synchronized boolean onGoAwayReceived(int lastStreamId, long errorCode, ByteBuf debugData) {
+    boolean goneAway = super.onGoAwayReceived(lastStreamId, errorCode, debugData);
+    if (goneAway) {
+      listener.onEvict();
+    }
+    return goneAway;
   }
 
   @Override
@@ -94,18 +97,14 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     super.onStreamClosed(nettyStream);
   }
 
-  @Override
-  public void createStream(HttpClientRequestImpl req, Handler<AsyncResult<HttpClientStream>> completionHandler) {
+  void upgradeStream(Object metric, ContextInternal context, Handler<AsyncResult<HttpClientStream>> completionHandler) {
     Future<HttpClientStream> fut;
     synchronized (this) {
       try {
-        Http2Connection conn = handler.connection();
-        Http2Stream stream = conn.local().createStream(conn.local().incrementAndGetNextStreamId(), false);
-        boolean writable = handler.encoder().flowController().isWritable(stream);
-        Http2ClientStream clientStream = new Http2ClientStream(this, req, stream, writable);
-        streams.put(clientStream.stream.id(), clientStream);
-        fut = Future.succeededFuture(clientStream);
-      } catch (Http2Exception e) {
+        Http2ClientStream stream = createStream(context, handler.connection().stream(1));
+        stream.metric = metric;
+        fut = Future.succeededFuture(stream);
+      } catch (Exception e) {
         fut = Future.failedFuture(e);
       }
     }
@@ -113,11 +112,55 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
   }
 
   @Override
+  public void createStream(ContextInternal context, Handler<AsyncResult<HttpClientStream>> completionHandler) {
+    ContextInternal sub = getContext().duplicate(context);
+    Future<HttpClientStream> fut;
+    synchronized (this) {
+      Http2Connection conn = handler.connection();
+      try {
+        int id = conn.local().lastStreamCreated() == 0 ? 1 : conn.local().lastStreamCreated() + 2;
+        Http2ClientStream stream = createStream(sub, conn.local().createStream(id, false));
+        fut = Future.succeededFuture(stream);
+      } catch (Exception e) {
+        fut = Future.failedFuture(e);
+      }
+    }
+    sub.dispatch(fut, completionHandler);
+  }
+
+  private Http2ClientStream createStream(ContextInternal context, Http2Stream stream) {
+    boolean writable = handler.encoder().flowController().isWritable(stream);
+    Http2ClientStream clientStream = new Http2ClientStream(this, context, stream, writable);
+    streams.put(clientStream.stream.id(), clientStream);
+    return clientStream;
+  }
+
+  private void recycle() {
+    int timeout = client.getOptions().getHttp2KeepAliveTimeout();
+    long expired = timeout > 0 ? System.currentTimeMillis() + timeout * 1000 : 0L;
+    listener.onRecycle(expired);
+  }
+
+  @Override
+  public synchronized void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers, int streamDependency, short weight, boolean exclusive, int padding, boolean endOfStream) throws Http2Exception {
+    Http2ClientStream stream = (Http2ClientStream) streams.get(streamId);
+    if (stream != null) {
+      StreamPriority streamPriority = new StreamPriority()
+        .setDependency(streamDependency)
+        .setWeight(weight)
+        .setExclusive(exclusive);
+      stream.context.dispatch(v -> {
+        stream.handleHeaders(headers, streamPriority, endOfStream);
+      });
+    }
+  }
+
+  @Override
   public synchronized void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers, int padding, boolean endOfStream) throws Http2Exception {
     Http2ClientStream stream = (Http2ClientStream) streams.get(streamId);
     if (stream != null) {
-      context.executeFromIO(() -> {
-        stream.handleHeaders(headers, endOfStream);
+      stream.context.dispatch(v -> {
+        stream.handleHeaders(headers, null, endOfStream);
       });
     }
   }
@@ -128,21 +171,28 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     if (stream != null) {
       Handler<HttpClientRequest> pushHandler = stream.pushHandler();
       if (pushHandler != null) {
-        context.executeFromIO(() -> {
-          String rawMethod = headers.method().toString();
-          HttpMethod method = HttpUtils.toVertxMethod(rawMethod);
-          String uri = headers.path().toString();
-          String host = headers.authority() != null ? headers.authority().toString() : null;
-          MultiMap headersMap = new Http2HeadersAdaptor(headers);
-          Http2Stream promisedStream = handler.connection().stream(promisedStreamId);
-          int port = remoteAddress().port();
-          HttpClientRequestPushPromise pushReq = new HttpClientRequestPushPromise(this, promisedStream, client, isSsl(), method, rawMethod, uri, host, port, headersMap);
-          if (metrics != null) {
-            pushReq.metric(metrics.responsePushed(queueMetric, metric(), localAddress(), remoteAddress(), pushReq));
-          }
-          streams.put(promisedStreamId, pushReq.getStream());
-          pushHandler.handle(pushReq);
-        });
+        String rawMethod = headers.method().toString();
+        HttpMethod method = HttpUtils.toVertxMethod(rawMethod);
+        String uri = headers.path().toString();
+        String authority = headers.authority() != null ? headers.authority().toString() : null;
+        MultiMap headersMap = new Http2HeadersAdaptor(headers);
+        Http2Stream promisedStream = handler.connection().stream(promisedStreamId);
+        int pos = authority.indexOf(':');
+        int port;
+        String host;
+        if (pos == -1) {
+          host = authority;
+          port = 80;
+        } else {
+          host = authority.substring(0, pos);
+          port = Integer.parseInt(authority.substring(pos + 1));
+        }
+        HttpClientRequestPushPromise pushReq = new HttpClientRequestPushPromise(this, promisedStream, client, isSsl(), method, rawMethod, uri, host, port, headersMap);
+        if (metrics != null) {
+          pushReq.getStream().metric = metrics.responsePushed(queueMetric, metric(), localAddress(), remoteAddress(), pushReq);
+        }
+        streams.put(promisedStreamId, pushReq.getStream());
+        stream.context.dispatch(pushReq, pushHandler);
         return;
       }
     }
@@ -151,14 +201,31 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
 
   static class Http2ClientStream extends VertxHttp2Stream<Http2ClientConnection> implements HttpClientStream {
 
-    private final HttpClientRequestBase request;
+    private HttpClientRequestBase request;
     private HttpClientResponseImpl response;
+    private Handler<Void> continueHandler;
     private boolean requestEnded;
     private boolean responseEnded;
+    private Object trace;
+    private Object metric;
 
-    public Http2ClientStream(Http2ClientConnection conn, HttpClientRequestBase request, Http2Stream stream, boolean writable) throws Http2Exception {
-      super(conn, stream, writable);
+    Http2ClientStream(Http2ClientConnection conn, ContextInternal context, Http2Stream stream, boolean writable) {
+      super(conn, context, stream, writable);
+    }
+
+    Http2ClientStream(Http2ClientConnection conn, ContextInternal context, HttpClientRequestPushPromise request, Http2Stream stream, boolean writable) {
+      super(conn, context, stream, writable);
       this.request = request;
+    }
+
+    @Override
+    public StreamPriority priority() {
+      return super.priority();
+    }
+
+    @Override
+    public void updatePriority(StreamPriority streamPriority) {
+      super.updatePriority(streamPriority);
     }
 
     @Override
@@ -172,20 +239,21 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     }
 
     @Override
+    public Object metric() {
+      return metric;
+    }
+
+    @Override
     void handleEnd(MultiMap trailers) {
       if (conn.metrics != null) {
-        if (request.exceptionOccurred != null) {
-          conn.metrics.requestReset(request.metric());
-        } else {
-          conn.metrics.responseEnd(request.metric(), response);
-        }
+        conn.metrics.responseEnd(metric, response);
       }
       responseEnded = true;
       // Should use a shared immutable object for CaseInsensitiveHeaders ?
       if (trailers == null) {
         trailers = new CaseInsensitiveHeaders();
       }
-      response.handleEnd(null, trailers);
+      response.handleEnd(trailers);
     }
 
     @Override
@@ -195,38 +263,45 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
 
     @Override
     void handleReset(long errorCode) {
-      if (responseEnded) {
-        return;
-      }
-      responseEnded = true;
-      if (conn.metrics != null) {
-        conn.metrics.requestReset(request.metric());
+      synchronized (conn) {
+        if (responseEnded) {
+          return;
+        }
+        responseEnded = true;
+        if (conn.metrics != null) {
+          conn.metrics.requestReset(metric);
+        }
       }
       handleException(new StreamResetException(errorCode));
     }
 
     @Override
     void handleClose() {
+      super.handleClose();
+      VertxTracer tracer = context.tracer();
+      if (tracer != null) {
+        Throwable failure;
+        if (!responseEnded || !requestEnded) {
+          failure = ConnectionBase.CLOSED_EXCEPTION;
+        } else {
+          failure = null;
+        }
+        tracer.receiveResponse(context, failure == null ? response : null, trace, failure, HttpUtils.CLIENT_RESPONSE_TAG_EXTRACTOR);
+      }
+
       // commented to be used later when we properly define the HTTP/2 connection expiration from the pool
       // boolean disposable = conn.streams.isEmpty();
-      if (request instanceof HttpClientRequestImpl) {
-        conn.listener.onRecycle(1, false);
+      if (request == null || request instanceof HttpClientRequestImpl) {
+        conn.recycle();
       } /* else {
         conn.listener.onRecycle(0, dispable);
       } */
       if (!responseEnded) {
         responseEnded = true;
         if (conn.metrics != null) {
-          conn.metrics.requestReset(request.metric());
+          conn.metrics.requestReset(metric);
         }
-        handleException(new VertxException("Connection was closed")); // Put that in utility class
-      }
-    }
-
-    @Override
-    public void checkDrained() {
-      synchronized (conn) {
-        handleInterestedOpsChanged();
+        handleException(CLOSED_EXCEPTION);
       }
     }
 
@@ -241,11 +316,23 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
 
     @Override
     void handleCustomFrame(int type, int flags, Buffer buff) {
-      response.handleUnknowFrame(new HttpFrameImpl(type, flags, buff));
+      response.handleUnknownFrame(new HttpFrameImpl(type, flags, buff));
     }
 
-    void handleHeaders(Http2Headers headers, boolean end) {
-      if (response == null || response.statusCode() == 100) {
+    
+    @Override
+    void handlePriorityChange(StreamPriority streamPriority) {
+      if(streamPriority != null && !streamPriority.equals(priority())) {
+        priority(streamPriority);
+        response.handlePriorityChange(streamPriority);
+      }
+    }
+
+    void handleHeaders(Http2Headers headers, StreamPriority streamPriority, boolean end) {
+      if(streamPriority != null) {
+        priority(streamPriority);
+      }
+      if (response == null) {
         int status;
         String statusMessage;
         try {
@@ -256,6 +343,13 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
           writeReset(0x01 /* PROTOCOL_ERROR */);
           return;
         }
+        if (status == 100) {
+          if (continueHandler != null) {
+            context.dispatch(continueHandler);
+          }
+          return;
+        }
+        headers.remove(":status");
         response = new HttpClientResponseImpl(
             request,
             HttpVersion.HTTP_2,
@@ -265,7 +359,7 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
             new Http2HeadersAdaptor(headers)
         );
         if (conn.metrics != null) {
-          conn.metrics.responseBegin(request.metric(), response);
+          conn.metrics.responseBegin(metric, response);
         }
         request.handleResponse(response);
         if (end) {
@@ -277,15 +371,17 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     }
 
     void handleException(Throwable exception) {
-      if (!requestEnded || response == null) {
-        context.executeFromIO(() -> {
-          request.handleException(exception);
-        });
+      HttpClientRequestBase req;
+      HttpClientResponseImpl resp;
+      synchronized (conn) {
+        req = (!requestEnded || response == null || response.statusCode() == 100) ? request : null;
+        resp = response;
       }
-      if (response != null) {
-        context.executeFromIO(() -> {
-          response.handleException(exception);
-        });
+      if (req != null) {
+        req.handleException(exception);
+      }
+      if (resp != null) {
+        resp.handleException(exception);
       }
     }
 
@@ -294,12 +390,7 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     }
 
     @Override
-    public void writeHead(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked) {
-      writeHeadWithContent(method, rawMethod, uri, headers, hostHeader, chunked, null, false);
-    }
-
-    @Override
-    public void writeHeadWithContent(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked, ByteBuf content, boolean end) {
+    public void writeHead(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked, ByteBuf content, boolean end, StreamPriority priority, Handler<Void> contHandler, Handler<AsyncResult<Void>> handler) {
       Http2Headers h = new DefaultHttp2Headers();
       h.method(method != HttpMethod.OTHER ? method.name() : rawMethod);
       if (method == HttpMethod.CONNECT) {
@@ -309,7 +400,7 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
         h.authority(hostHeader);
       } else {
         h.path(uri);
-        h.scheme("https");
+        h.scheme(conn.isSsl() ? "https" : "http");
         if (hostHeader != null) {
           h.authority(hostHeader);
         }
@@ -322,37 +413,40 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
       if (conn.client.getOptions().isTryUseCompression() && h.get(HttpHeaderNames.ACCEPT_ENCODING) == null) {
         h.set(HttpHeaderNames.ACCEPT_ENCODING, DEFLATE_GZIP);
       }
+      continueHandler = contHandler;
       if (conn.metrics != null) {
-        request.metric(conn.metrics.requestBegin(conn.queueMetric, conn.metric(), conn.localAddress(), conn.remoteAddress(), request));
+        metric = conn.metrics.requestBegin(conn.queueMetric, conn.metric(), conn.localAddress(), conn.remoteAddress(), request);
       }
-      writeHeaders(h, end && content == null);
+      priority(priority);
       if (content != null) {
-        writeBuffer(content, end);
+        writeHeaders(h, false, null);
+        writeBuffer(content, end, handler);
       } else {
+        writeHeaders(h, end, handler);
         handlerContext.flush();
       }
     }
 
     @Override
-    public void writeBuffer(ByteBuf buf, boolean end) {
+    public void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> handler) {
       if (buf == null && end) {
         buf = Unpooled.EMPTY_BUFFER;
       }
       if (buf != null) {
-        writeData(buf, end);
+        writeData(buf, end, handler);
       }
       if (end) {
         handlerContext.flush();
       }
     }
-
+    
     @Override
     public void writeFrame(int type, int flags, ByteBuf payload) {
       super.writeFrame(type, flags, payload);
     }
 
     @Override
-    public Context getContext() {
+    public ContextInternal getContext() {
       return context;
     }
 
@@ -366,25 +460,38 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     }
 
     @Override
-    public void beginRequest() {
+    public void beginRequest(HttpClientRequestImpl req) {
+      request = req;
+      VertxTracer tracer = context.tracer();
+      if (tracer != null) {
+        BiConsumer<String, String> headers = (key, val) -> req.headers().add(key, val);
+        trace = tracer.sendRequest(context, request, request.method.name(), headers, HttpUtils.CLIENT_REQUEST_TAG_EXTRACTOR);
+      }
     }
 
     @Override
     public void endRequest() {
       if (conn.metrics != null) {
-        conn.metrics.requestEnd(request.metric());
+        conn.metrics.requestEnd(metric);
       }
       requestEnded = true;
     }
 
     @Override
-    public void reset(long code) {
-      if (!(requestEnded && responseEnded)) {
-        requestEnded = true;
-        responseEnded = true;
+    public void reset(Throwable cause) {
+      long code = cause instanceof StreamResetException ? ((StreamResetException)cause).getCode() : 0;
+      if (request == null) {
+        // Not sure this is possible in practice
         writeReset(code);
-        if (conn.metrics != null) {
-          conn.metrics.requestReset(request.metric());
+      } else {
+        if (!(requestEnded && responseEnded)) {
+          handleException(cause);
+          requestEnded = true;
+          responseEnded = true;
+          writeReset(code);
+          if (conn.metrics != null) {
+            conn.metrics.requestReset(metric);
+          }
         }
       }
     }
@@ -398,5 +505,59 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     public NetSocket createNetSocket() {
       return conn.toNetSocket(this);
     }
+  }
+
+  @Override
+  protected void handleIdle() {
+    synchronized (this) {
+      if (streams.isEmpty()) {
+        return;
+      }
+    }
+    super.handleIdle();
+  }
+
+  public static VertxHttp2ConnectionHandler<Http2ClientConnection> createHttp2ConnectionHandler(
+    HttpClientImpl client,
+    Object queueMetric,
+    ConnectionListener<HttpClientConnection> listener,
+    ContextInternal context,
+    Object socketMetric,
+    BiConsumer<Http2ClientConnection, Long> c) {
+    long http2MaxConcurrency = client.getOptions().getHttp2MultiplexingLimit() <= 0 ? Long.MAX_VALUE : client.getOptions().getHttp2MultiplexingLimit();
+    HttpClientOptions options = client.getOptions();
+    HttpClientMetrics metrics = client.metrics();
+    VertxHttp2ConnectionHandler<Http2ClientConnection> handler = new VertxHttp2ConnectionHandlerBuilder<Http2ClientConnection>()
+      .server(false)
+      .useCompression(client.getOptions().isTryUseCompression())
+      .initialSettings(client.getOptions().getInitialSettings())
+      .connectionFactory(connHandler -> new Http2ClientConnection(listener, queueMetric, client, context, connHandler, metrics))
+      .logEnabled(options.getLogActivity())
+      .build();
+    handler.addHandler(conn -> {
+      if (options.getHttp2ConnectionWindowSize() > 0) {
+        conn.setWindowSize(options.getHttp2ConnectionWindowSize());
+      }
+      if (metrics != null) {
+        Object m = socketMetric;
+        if (m == null)  {
+          m = metrics.connected(conn.remoteAddress(), conn.remoteName());
+          metrics.endpointConnected(queueMetric, m);
+        } 
+        conn.metric(m);
+      }
+      long concurrency = conn.remoteSettings().getMaxConcurrentStreams();
+      if (http2MaxConcurrency > 0) {
+        concurrency = Math.min(concurrency, http2MaxConcurrency);
+      }
+      c.accept(conn, concurrency);
+    });
+    handler.removeHandler(conn -> {
+      if (metrics != null) {
+        metrics.endpointDisconnected(queueMetric, conn.metric());
+      }
+      listener.onEvict();
+    });
+    return handler;
   }
 }

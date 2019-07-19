@@ -11,7 +11,9 @@
 
 package io.vertx.core.http.impl.pool;
 
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Handler;
+import io.vertx.core.impl.ContextInternal;
 
 /**
  * Provides how the connection manager interacts its connections.
@@ -21,14 +23,13 @@ import io.vertx.core.impl.ContextImpl;
 public interface ConnectionProvider<C> {
 
   /**
-   * Connect to the server and signals the {@code listener} the success with {@link ConnectionListener#onConnectSuccess}
-   * or the failure with {@link ConnectionListener#onConnectFailure}.
+   * Connect to the server.
    *
    * @param listener the listener
    * @param context the context to use for the connection
-   * @return the initial weight of the connection, which will eventually be corrected when calling the listener
+   * @param resultHandler the handler notified with the connection success or failure
    */
-  long connect(ConnectionListener<C> listener, ContextImpl context);
+  void connect(ConnectionListener<C> listener, ContextInternal context, Handler<AsyncResult<ConnectResult<C>>> resultHandler);
 
   /**
    * Close a connection.

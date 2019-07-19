@@ -11,11 +11,7 @@
 
 package io.vertx.core.impl;
 
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Closeable;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
 import io.vertx.core.spi.metrics.Metrics;
 import io.vertx.core.spi.metrics.MetricsProvider;
 import io.vertx.core.spi.metrics.PoolMetrics;
@@ -23,17 +19,15 @@ import io.vertx.core.spi.metrics.PoolMetrics;
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-class WorkerExecutorImpl implements Closeable, MetricsProvider, WorkerExecutorInternal {
+class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
 
-  private final Vertx vertx;
-  private final WorkerPool pool;
+  private final Context ctx;
+  private final VertxImpl.SharedWorkerPool pool;
   private boolean closed;
-  private final boolean releaseOnClose;
 
-  public WorkerExecutorImpl(Vertx vertx, WorkerPool pool, boolean releaseOnClose) {
-    this.vertx = vertx;
+  public WorkerExecutorImpl(Context ctx, VertxImpl.SharedWorkerPool pool) {
+    this.ctx = ctx;
     this.pool = pool;
-    this.releaseOnClose = releaseOnClose;
   }
 
   @Override
@@ -49,19 +43,21 @@ class WorkerExecutorImpl implements Closeable, MetricsProvider, WorkerExecutorIn
 
   @Override
   public Vertx vertx() {
-    return vertx;
+    return ctx.owner();
   }
 
+  @Override
   public WorkerPool getPool() {
     return pool;
   }
 
-  public synchronized <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> asyncResultHandler) {
+  public synchronized <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> asyncResultHandler) {
     if (closed) {
       throw new IllegalStateException("Worker executor closed");
     }
-    ContextImpl context = (ContextImpl) vertx.getOrCreateContext();
-    context.executeBlocking(null, blockingCodeHandler, asyncResultHandler, pool.executor(), ordered ? context.orderedTasks : null, pool.metrics());
+    ContextInternal context = (ContextInternal) ctx.owner().getOrCreateContext();
+    ContextImpl impl = context instanceof ContextImpl.Duplicated ? ((ContextImpl.Duplicated)context).delegate : (ContextImpl) context;
+    ContextImpl.executeBlocking(context, blockingCodeHandler, asyncResultHandler, pool, ordered ? impl.orderedTasks : null);
   }
 
   @Override
@@ -73,9 +69,8 @@ class WorkerExecutorImpl implements Closeable, MetricsProvider, WorkerExecutorIn
         return;
       }
     }
-    if (releaseOnClose && pool instanceof VertxImpl.SharedWorkerPool) {
-      ((VertxImpl.SharedWorkerPool)pool).release();
-    }
+    ctx.removeCloseHook(this);
+    pool.release();
   }
 
   @Override

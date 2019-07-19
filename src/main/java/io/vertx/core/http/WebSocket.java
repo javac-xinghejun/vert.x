@@ -12,6 +12,7 @@
 package io.vertx.core.http;
 
 import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 
@@ -36,10 +37,10 @@ public interface WebSocket extends WebSocketBase {
   WebSocket resume();
 
   @Override
-  WebSocket endHandler(Handler<Void> endHandler);
+  WebSocket fetch(long amount);
 
   @Override
-  WebSocket write(Buffer data);
+  WebSocket endHandler(Handler<Void> endHandler);
 
   @Override
   WebSocket setWriteQueueMaxSize(int maxSize);
@@ -48,19 +49,19 @@ public interface WebSocket extends WebSocketBase {
   WebSocket drainHandler(Handler<Void> handler);
 
   @Override
-  WebSocket writeFrame(WebSocketFrame frame);
+  WebSocket writeFrame(WebSocketFrame frame, Handler<AsyncResult<Void>> handler);
 
   @Override
-  WebSocket writeFinalTextFrame(String text);
+  WebSocket writeFinalTextFrame(String text, Handler<AsyncResult<Void>> handler);
 
   @Override
-  WebSocket writeFinalBinaryFrame(Buffer data);
+  WebSocket writeFinalBinaryFrame(Buffer data, Handler<AsyncResult<Void>> handler);
 
   @Override
-  WebSocket writeBinaryMessage(Buffer data);
+  WebSocket writeBinaryMessage(Buffer data, Handler<AsyncResult<Void>> handler);
 
   @Override
-  WebSocket writeTextMessage(String text);
+  WebSocket writeTextMessage(String text, Handler<AsyncResult<Void>> handler);
 
   @Override
   WebSocket closeHandler(Handler<Void> handler);

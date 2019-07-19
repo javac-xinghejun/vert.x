@@ -11,14 +11,13 @@
 
 package io.vertx.core.http;
 
-import io.vertx.codegen.annotations.Nullable;
+import io.netty.handler.codec.http2.Http2CodecUtil;
+import io.vertx.codegen.annotations.*;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.codegen.annotations.CacheReturn;
-import io.vertx.codegen.annotations.Fluent;
-import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.streams.ReadStream;
@@ -54,6 +53,9 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
 
   @Override
   HttpServerRequest resume();
+
+  @Override
+  HttpServerRequest fetch(long amount);
 
   @Override
   HttpServerRequest endHandler(Handler<Void> endHandler);
@@ -108,6 +110,11 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   String host();
 
   /**
+   * @return the total number of bytes read for the body of the request.
+   */
+  long bytesRead();
+
+  /**
    * @return the response. Each instance of this class has an {@link HttpServerResponse} instance attached to it. This is used
    * to send the response back to the client.
    */
@@ -135,7 +142,7 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @param headerName  the header name
    * @return the header value
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   String getHeader(CharSequence headerName);
 
   /**
@@ -171,7 +178,7 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    *         not SSL.
    * @see javax.net.ssl.SSLSession
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   SSLSession sslSession();
 
   /**
@@ -212,15 +219,54 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   }
 
   /**
+   * Same as {@link #body()} but with an {@code handler} called when the operation completes
+   */
+  default HttpServerRequest body(Handler<AsyncResult<Buffer>> handler) {
+    body().setHandler(handler);
+    return this;
+  }
+
+  /**
+   * Convenience method for receiving the entire request body in one piece.
+   * <p>
+   * This saves you having to manually set a dataHandler and an endHandler and append the chunks of the body until
+   * the whole body received. Don't use this if your request body is large - you could potentially run out of RAM.
+   *
+   * @return a future completed with the body result
+   */
+  Future<Buffer> body();
+
+  /**
    * Get a net socket for the underlying connection of this request.
-   * <p>
-   * USE THIS WITH CAUTION!
-   * <p>
-   * Once you have called this method, you must handle writing to the connection yourself using the net socket,
-   * the server request instance will no longer be usable as normal.
-   * Writing to the socket directly if you don't know what you're doing can easily break the HTTP protocol.
+   * <p/>
+   * This method must be called before the server response is ended.
+   * <p/>
+   * With {@code CONNECT} requests, a {@code 200} response is sent with no {@code content-length} header set
+   * before returning the socket.
+   * <p/>
+   * <pre>
+   * server.requestHandler(req -> {
+   *   if (req.method() == HttpMethod.CONNECT) {
+   *     // Send a 200 response to accept the connect
+   *     NetSocket socket = req.netSocket();
+   *     socket.handler(buff -> {
+   *       socket.write(buff);
+   *     });
+   *   }
+   *   ...
+   * });
+   * </pre>
+   * <p/>
+   * For other HTTP/1 requests once you have called this method, you must handle writing to the connection yourself using
+   * the net socket, the server request instance will no longer be usable as normal. USE THIS WITH CAUTION! Writing to the socket directly if you don't know what you're
+   * doing can easily break the HTTP protocol.
+   * <p/>
+   * With HTTP/2, a {@code 200} response is always sent with no {@code content-length} header set before returning the socket
+   * like in the {@code CONNECT} case above.
+   * <p/>
    *
    * @return the net socket
+   * @throws IllegalStateException when the socket can't be created
    */
   @CacheReturn
   NetSocket netSocket();
@@ -274,10 +320,12 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   /**
    * Upgrade the connection to a WebSocket connection.
    * <p>
-   * This is an alternative way of handling WebSockets and can only be used if no websocket handlers are set on the
-   * Http server, and can only be used during the upgrade request during the WebSocket handshake.
+   * This is an alternative way of handling WebSockets and can only be used if no WebSocket handler is set on the
+   * {@code HttpServer}, and can only be used during the upgrade request during the WebSocket handshake.
    *
-   * @return  the WebSocket
+   * @return the WebSocket
+   * @throws IllegalStateException if the current request cannot be upgraded, when it happens an appropriate response
+   *                               is sent
    */
   ServerWebSocket upgrade();
 
@@ -303,4 +351,20 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   @CacheReturn
   HttpConnection connection();
 
+  /**
+   * @return the priority of the associated HTTP/2 stream for HTTP/2 otherwise {@code null}
+   */
+  default StreamPriority streamPriority() {
+      return null;
+  }
+
+  /**
+   * Set an handler for stream priority changes
+   * <p>
+   * This is not implemented for HTTP/1.x.
+   * 
+   * @param handler the handler to be called when stream priority changes
+   */
+  @Fluent
+  HttpServerRequest streamPriorityHandler(Handler<StreamPriority> handler);
 }

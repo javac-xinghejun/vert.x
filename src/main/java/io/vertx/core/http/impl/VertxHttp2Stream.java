@@ -13,64 +13,80 @@ package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http2.EmptyHttp2Headers;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Stream;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.http.StreamPriority;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
-
-import java.util.ArrayDeque;
+import io.vertx.core.streams.impl.InboundBuffer;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
 abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
 
-  private static final Object END = new Object(); // Marker
+  private static final MultiMap EMPTY = new Http2HeadersAdaptor(EmptyHttp2Headers.INSTANCE);
 
   protected final C conn;
   protected final VertxInternal vertx;
-  protected final ContextImpl context;
+  protected final ContextInternal context;
   protected final ChannelHandlerContext handlerContext;
   protected final Http2Stream stream;
 
-  private final ArrayDeque<Object> pending = new ArrayDeque<>(8);
-  private boolean paused;
-  private boolean writable = true;
+  private final InboundBuffer<Object> pending;
+  private int pendingBytes;
+  private MultiMap trailers;
+  private boolean writable;
+  private StreamPriority priority;
+  private long bytesRead;
+  private long bytesWritten;
 
-  VertxHttp2Stream(C conn, Http2Stream stream, boolean writable) {
+  VertxHttp2Stream(C conn, ContextInternal context, Http2Stream stream, boolean writable) {
     this.conn = conn;
     this.vertx = conn.vertx();
     this.handlerContext = conn.handlerContext;
     this.stream = stream;
-    this.context = conn.getContext();
+    this.context = context;
     this.writable = writable;
+    this.pending = new InboundBuffer<>(context, 5);
+    this.priority = HttpUtils.DEFAULT_STREAM_PRIORITY;
+
+    pending.drainHandler(v -> {
+      int numBytes = pendingBytes;
+      pendingBytes = 0;
+      conn.handler.consume(stream, numBytes);
+    });
+
+    pending.handler(buff -> {
+      if (buff == InboundBuffer.END_SENTINEL) {
+        conn.reportBytesRead(bytesRead);
+        handleEnd(trailers);
+      } else {
+        Buffer data = (Buffer) buff;
+        bytesRead += data.length();
+        handleData(data);
+      }
+    });
+    pending.exceptionHandler(context.exceptionHandler());
+
+    pending.resume();
   }
 
   void onResetRead(long code) {
-    synchronized (conn) {
-      paused = false;
-      pending.clear();
-      handleReset(code);
-    }
+    handleReset(code);
   }
 
   boolean onDataRead(Buffer data) {
-    synchronized (conn) {
-      if (!paused) {
-        if (pending.isEmpty()) {
-          handleData(data);
-          return true;
-        } else {
-          pending.add(data);
-          checkNextTick(null);
-        }
-      } else {
-        pending.add(data);
-      }
-      return false;
+    boolean read = pending.write(data);
+    if (!read) {
+      pendingBytes += data.length();
     }
+    return read;
   }
 
   void onWritabilityChanged() {
@@ -81,57 +97,34 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   }
 
   void onEnd() {
-    onEnd(null);
+    onEnd(EMPTY);
   }
 
-  void onEnd(MultiMap trailers) {
+  void onEnd(MultiMap map) {
     synchronized (conn) {
-      if (paused || pending.size() > 0) {
-        if (trailers != null) {
-          pending.add(trailers);
-        } else {
-          pending.add(END);
-        }
-      } else {
-        handleEnd(trailers);
-      }
+      trailers = map;
     }
-  }
-
-  /**
-   * Check if paused buffers must be handled to the reader, this must be called from event loop.
-   */
-  private void checkNextTick(Void v) {
-    synchronized (conn) {
-      if (!paused) {
-        Object msg = pending.poll();
-        if (msg instanceof Buffer) {
-          Buffer buf = (Buffer) msg;
-          conn.handler.consume(stream, buf.length());
-          handleData(buf);
-          if (pending.size() > 0) {
-            vertx.runOnContext(this::checkNextTick);
-          }
-        } else if (msg == END) {
-          handleEnd(null);
-        } else if (msg instanceof MultiMap) {
-          handleEnd((MultiMap) msg);
-        }
-      }
-    }
+    pending.write(InboundBuffer.END_SENTINEL);
   }
 
   int id() {
     return stream.id();
   }
 
-  public void doPause() {
-    paused = true;
+  long bytesWritten() {
+    return bytesWritten;
   }
 
-  public void doResume() {
-    paused = false;
-    context.runOnContext(this::checkNextTick);
+  long bytesRead() {
+    return bytesRead;
+  }
+
+  public void doPause() {
+    pending.pause();
+  }
+
+  public void doFetch(long amount) {
+    pending.fetch(amount);
   }
 
   boolean isNotWritable() {
@@ -144,12 +137,21 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
     conn.handler.writeFrame(stream, (byte) type, (short) flags, payload);
   }
 
-  void writeHeaders(Http2Headers headers, boolean end) {
-    conn.handler.writeHeaders(stream, headers, end);
+  void writeHeaders(Http2Headers headers, boolean end, Handler<AsyncResult<Void>> handler) {
+    conn.handler.writeHeaders(stream, headers, end, priority.getDependency(), priority.getWeight(), priority.isExclusive(), handler);
+  }
+
+  private void writePriorityFrame(StreamPriority priority) {
+    conn.handler.writePriority(stream, priority.getDependency(), priority.getWeight(), priority.isExclusive());
   }
 
   void writeData(ByteBuf chunk, boolean end) {
-    conn.handler.writeData(stream, chunk, end);
+    writeData(chunk, end, null);
+  }
+
+  void writeData(ByteBuf chunk, boolean end, Handler<AsyncResult<Void>> handler) {
+    bytesWritten += chunk.readableBytes();
+    conn.handler.writeData(stream, chunk, end, handler);
   }
 
   void writeReset(long code) {
@@ -175,5 +177,25 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   }
 
   void handleClose() {
+    conn.reportBytesWritten(bytesWritten);
   }
+  
+  synchronized void priority(StreamPriority streamPriority) {
+    this.priority = streamPriority;
+  }
+
+  synchronized StreamPriority priority() {
+    return priority;
+  }
+
+  synchronized void updatePriority(StreamPriority priority) {
+    if (!this.priority.equals(priority)) {
+      this.priority = priority;
+      if (stream.isHeadersSent()) {
+        writePriorityFrame(priority);
+      }
+    }
+  }
+
+  abstract void handlePriorityChange(StreamPriority streamPriority);
 }

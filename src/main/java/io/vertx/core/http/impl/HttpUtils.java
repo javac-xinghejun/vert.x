@@ -14,18 +14,22 @@ package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import io.netty.handler.codec.compression.ZlibWrapper;
-import io.netty.handler.codec.http.HttpContentCompressor;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Settings;
+import io.netty.util.AsciiString;
+import io.netty.util.CharsetUtil;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.CaseInsensitiveHeaders;
+import io.vertx.core.http.HttpClientRequest;
+import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.http.StreamPriority;
+import io.vertx.core.spi.tracing.TagExtractor;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -33,7 +37,10 @@ import java.nio.charset.Charset;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
+import static io.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
+import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 import static io.vertx.core.http.Http2Settings.*;
 
 /**
@@ -42,6 +49,123 @@ import static io.vertx.core.http.Http2Settings.*;
  * @author <a href="mailto:nmaurer@redhat.com">Norman Maurer</a>
  */
 public final class HttpUtils {
+
+  static final int SC_SWITCHING_PROTOCOLS = 101;
+  static final int SC_BAD_GATEWAY = 502;
+
+  static final TagExtractor<HttpServerRequest> SERVER_REQUEST_TAG_EXTRACTOR = new TagExtractor<HttpServerRequest>() {
+    @Override
+    public int len(HttpServerRequest req) {
+      return 2;
+    }
+    @Override
+    public String name(HttpServerRequest req, int index) {
+      switch (index) {
+        case 0:
+          return "http.url";
+        case 1:
+          return "http.method";
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+    @Override
+    public String value(HttpServerRequest req, int index) {
+      switch (index) {
+        case 0:
+          return req.absoluteURI();
+        case 1:
+          return req.method().name();
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+  };
+
+  static final TagExtractor<HttpServerResponse> SERVER_RESPONSE_TAG_EXTRACTOR = new TagExtractor<HttpServerResponse>() {
+    @Override
+    public int len(HttpServerResponse resp) {
+      return 1;
+    }
+    @Override
+    public String name(HttpServerResponse resp, int index) {
+      if (index == 0) {
+        return "http.status_code";
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+    @Override
+    public String value(HttpServerResponse resp, int index) {
+      if (index == 0) {
+        return "" + resp.getStatusCode();
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+  };
+
+  static final TagExtractor<HttpClientRequest> CLIENT_REQUEST_TAG_EXTRACTOR = new TagExtractor<HttpClientRequest>() {
+    @Override
+    public int len(HttpClientRequest req) {
+      return 2;
+    }
+    @Override
+    public String name(HttpClientRequest req, int index) {
+      switch (index) {
+        case 0:
+          return "http.url";
+        case 1:
+          return "http.method";
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+    @Override
+    public String value(HttpClientRequest req, int index) {
+      switch (index) {
+        case 0:
+          return req.absoluteURI();
+        case 1:
+          return req.method().name();
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+  };
+
+  static final TagExtractor<HttpClientResponse> CLIENT_RESPONSE_TAG_EXTRACTOR = new TagExtractor<HttpClientResponse>() {
+    @Override
+    public int len(HttpClientResponse resp) {
+      return 1;
+    }
+    @Override
+    public String name(HttpClientResponse resp, int index) {
+      if (index == 0) {
+        return "http.status_code";
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+    @Override
+    public String value(HttpClientResponse resp, int index) {
+      if (index == 0) {
+        return "" + resp.statusCode();
+      }
+      throw new IndexOutOfBoundsException("Invalid tag index " + index);
+    }
+  };
+
+  static final StreamPriority DEFAULT_STREAM_PRIORITY = new StreamPriority() {
+    @Override
+    public StreamPriority setWeight(short weight) {
+      throw new UnsupportedOperationException("Unmodifiable stream priority");
+    }
+
+    @Override
+    public StreamPriority setDependency(int dependency) {
+      throw new UnsupportedOperationException("Unmodifiable stream priority");
+    }
+
+    @Override
+    public StreamPriority setExclusive(boolean exclusive) {
+      throw new UnsupportedOperationException("Unmodifiable stream priority");
+    }
+  };
+
 
   private HttpUtils() {
   }
@@ -80,11 +204,96 @@ public final class HttpUtils {
   }
 
   /**
-   * Removed dots as per <a href="http://tools.ietf.org/html/rfc3986#section-5.2.4>rfc3986</a>.
+   * Normalizes a path as per <a href="http://tools.ietf.org/html/rfc3986#section-5.2.4>rfc3986</a>.
    *
    * There are 2 extra transformations that are not part of the spec but kept for backwards compatibility:
    *
    * double slash // will be converted to single slash and the path will always start with slash.
+   *
+   * Null paths are not normalized as nothing can be said about them.
+   *
+   * @param pathname raw path
+   * @return normalized path
+   */
+  public static String normalizePath(String pathname) {
+    if (pathname == null) {
+      return null;
+    }
+
+    // add trailing slash if not set
+    if (pathname.length() == 0) {
+      return "/";
+    }
+
+    StringBuilder ibuf = new StringBuilder(pathname.length() + 1);
+
+    // Not standard!!!
+    if (pathname.charAt(0) != '/') {
+      ibuf.append('/');
+    }
+
+    ibuf.append(pathname);
+    int i = 0;
+
+    while (i < ibuf.length()) {
+      // decode unreserved chars described in
+      // http://tools.ietf.org/html/rfc3986#section-2.4
+      if (ibuf.charAt(i) == '%') {
+        decodeUnreserved(ibuf, i);
+      }
+
+      i++;
+    }
+
+    // remove dots as described in
+    // http://tools.ietf.org/html/rfc3986#section-5.2.4
+    return removeDots(ibuf);
+  }
+
+  private static void decodeUnreserved(StringBuilder path, int start) {
+    if (start + 3 <= path.length()) {
+      // these are latin chars so there is no danger of falling into some special unicode char that requires more
+      // than 1 byte
+      final String escapeSequence = path.substring(start + 1, start + 3);
+      int unescaped;
+      try {
+        unescaped = Integer.parseInt(escapeSequence, 16);
+        if (unescaped < 0) {
+          throw new IllegalArgumentException("Invalid escape sequence: %" + escapeSequence);
+        }
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("Invalid escape sequence: %" + escapeSequence);
+      }
+      // validate if the octet is within the allowed ranges
+      if (
+        // ALPHA
+        (unescaped >= 0x41 && unescaped <= 0x5A) ||
+          (unescaped >= 0x61 && unescaped <= 0x7A) ||
+          // DIGIT
+          (unescaped >= 0x30 && unescaped <= 0x39) ||
+          // HYPHEN
+          (unescaped == 0x2D) ||
+          // PERIOD
+          (unescaped == 0x2E) ||
+          // UNDERSCORE
+          (unescaped == 0x5F) ||
+          // TILDE
+          (unescaped == 0x7E)) {
+
+        path.setCharAt(start, (char) unescaped);
+        path.delete(start + 1, start + 3);
+      }
+    } else {
+      throw new IllegalArgumentException("Invalid position for escape character: " + start);
+    }
+  }
+
+  /**
+   * Removed dots as per <a href="http://tools.ietf.org/html/rfc3986#section-5.2.4>rfc3986</a>.
+   *
+   * There is 1 extra transformation that are not part of the spec but kept for backwards compatibility:
+   *
+   * double slash // will be converted to single slash.
    *
    * @param path raw path
    * @return normalized path
@@ -379,6 +588,15 @@ public final class HttpUtils {
     return null;
   }
 
+  public static String encodeSettings(io.vertx.core.http.Http2Settings settings) {
+    Buffer buffer = Buffer.buffer();
+    fromVertxSettings(settings).forEach((c, l) -> {
+      buffer.appendUnsignedShort(c);
+      buffer.appendUnsignedInt(l);
+    });
+    return Base64.getUrlEncoder().encodeToString(buffer.getBytes());
+  }
+
   public static ByteBuf generateWSCloseFrameByteBuf(short statusCode, String reason) {
     if (reason != null)
       return Unpooled.copiedBuffer(
@@ -387,6 +605,42 @@ public final class HttpUtils {
       );
     else
       return Unpooled.copyShort(statusCode);
+  }
+
+  static void sendError(Channel ch, HttpResponseStatus status) {
+    sendError(ch, status, status.reasonPhrase());
+  }
+
+  static void sendError(Channel ch, HttpResponseStatus status, CharSequence err) {
+    FullHttpResponse resp = new DefaultFullHttpResponse(HTTP_1_1, status);
+    if (status.code() == METHOD_NOT_ALLOWED.code()) {
+      // SockJS requires this
+      resp.headers().set(io.vertx.core.http.HttpHeaders.ALLOW, io.vertx.core.http.HttpHeaders.GET);
+    }
+    if (err != null) {
+      resp.content().writeBytes(err.toString().getBytes(CharsetUtil.UTF_8));
+      HttpUtil.setContentLength(resp, err.length());
+    } else {
+      HttpUtil.setContentLength(resp, 0);
+    }
+    ch.writeAndFlush(resp);
+  }
+
+  static String getWebSocketLocation(HttpServerRequest req, boolean ssl) throws Exception {
+    String prefix;
+    if (ssl) {
+      prefix = "ws://";
+    } else {
+      prefix = "wss://";
+    }
+    URI uri = new URI(req.uri());
+    String path = uri.getRawPath();
+    String loc = prefix + req.headers().get(HttpHeaderNames.HOST) + path;
+    String query = uri.getRawQuery();
+    if (query != null) {
+      loc += "?" + query;
+    }
+    return loc;
   }
 
   private static class CustomCompressor extends HttpContentCompressor {
@@ -461,21 +715,157 @@ public final class HttpUtils {
     }
   }
 
-  static io.vertx.core.http.HttpVersion toVertxHttpVersion(HttpVersion version) {
-    if (version == io.netty.handler.codec.http.HttpVersion.HTTP_1_0) {
-      return io.vertx.core.http.HttpVersion.HTTP_1_0;
-    } else if (version == io.netty.handler.codec.http.HttpVersion.HTTP_1_1) {
-      return io.vertx.core.http.HttpVersion.HTTP_1_1;
-    } else {
-      return null;
-    }
-  }
-
   static io.vertx.core.http.HttpMethod toVertxMethod(String method) {
     try {
       return io.vertx.core.http.HttpMethod.valueOf(method);
     } catch (IllegalArgumentException e) {
       return io.vertx.core.http.HttpMethod.OTHER;
+    }
+  }
+
+  private static final AsciiString TIMEOUT_EQ = AsciiString.of("timeout=");
+
+  public static int parseKeepAliveHeaderTimeout(CharSequence value) {
+    int len = value.length();
+    int pos = 0;
+    while (pos < len) {
+      int idx = AsciiString.indexOf(value, ',', pos);
+      int next;
+      if (idx == -1) {
+        idx = next = len;
+      } else {
+        next = idx + 1;
+      }
+      while (pos < idx && value.charAt(pos) == ' ') {
+        pos++;
+      }
+      int to = idx;
+      while (to > pos && value.charAt(to -1) == ' ') {
+        to--;
+      }
+      if (AsciiString.regionMatches(value, true, pos, TIMEOUT_EQ, 0, TIMEOUT_EQ.length())) {
+        pos += TIMEOUT_EQ.length();
+        if (pos < to) {
+          int ret = 0;
+          while (pos < to) {
+            int ch = value.charAt(pos++);
+            if (ch >= '0' && ch < '9') {
+              ret = ret * 10 + (ch - '0');
+            } else {
+              ret = -1;
+              break;
+            }
+          }
+          if (ret > -1) {
+            return ret;
+          }
+        }
+      }
+      pos = next;
+    }
+    return -1;
+  }
+
+  private static final Consumer<CharSequence> HEADER_VALUE_VALIDATOR = HttpUtils::validateHeaderValue;
+
+  public static void validateHeader(CharSequence name, CharSequence value) {
+    validateHeaderName(name);
+    validateHeaderValue(value);
+  }
+
+  public static void validateHeader(CharSequence name, Iterable<? extends CharSequence> values) {
+    validateHeaderName(name);
+    values.forEach(HEADER_VALUE_VALIDATOR);
+  }
+
+  public static void validateHeaderValue(CharSequence seq) {
+
+    int state = 0;
+    // Start looping through each of the character
+    for (int index = 0; index < seq.length(); index++) {
+      state = validateValueChar(seq, state, seq.charAt(index));
+    }
+
+    if (state != 0) {
+      throw new IllegalArgumentException("a header value must not end with '\\r' or '\\n':" + seq);
+    }
+  }
+
+  private static final int HIGHEST_INVALID_VALUE_CHAR_MASK = ~15;
+
+  private static int validateValueChar(CharSequence seq, int state, char character) {
+    /*
+     * State:
+     * 0: Previous character was neither CR nor LF
+     * 1: The previous character was CR
+     * 2: The previous character was LF
+     */
+    if ((character & HIGHEST_INVALID_VALUE_CHAR_MASK) == 0) {
+      // Check the absolutely prohibited characters.
+      switch (character) {
+        case 0x0: // NULL
+          throw new IllegalArgumentException("a header value contains a prohibited character '\0': " + seq);
+        case 0x0b: // Vertical tab
+          throw new IllegalArgumentException("a header value contains a prohibited character '\\v': " + seq);
+        case '\f':
+          throw new IllegalArgumentException("a header value contains a prohibited character '\\f': " + seq);
+      }
+    }
+
+    // Check the CRLF (HT | SP) pattern
+    switch (state) {
+      case 0:
+        switch (character) {
+          case '\r':
+            return 1;
+          case '\n':
+            return 2;
+        }
+        break;
+      case 1:
+        switch (character) {
+          case '\n':
+            return 2;
+          default:
+            throw new IllegalArgumentException("only '\\n' is allowed after '\\r': " + seq);
+        }
+      case 2:
+        switch (character) {
+          case '\t':
+          case ' ':
+            return 0;
+          default:
+            throw new IllegalArgumentException("only ' ' and '\\t' are allowed after '\\n': " + seq);
+        }
+    }
+    return state;
+  }
+
+  public static void validateHeaderName(CharSequence value) {
+    for (int i = 0;i < value.length();i++) {
+      char c = value.charAt(i);
+      switch (c) {
+        case 0x00:
+        case '\t':
+        case '\n':
+        case 0x0b:
+        case '\f':
+        case '\r':
+        case ' ':
+        case ',':
+        case ':':
+        case ';':
+        case '=':
+          throw new IllegalArgumentException(
+            "a header name cannot contain the following prohibited characters: =,;: \\t\\r\\n\\v\\f: " +
+              value);
+        default:
+          // Check to see if the character is not an ASCII character, or invalid
+          if (c > 127) {
+            throw new IllegalArgumentException("a header name cannot contain non-ASCII character: " +
+              value);
+          }
+      }
     }
   }
 }

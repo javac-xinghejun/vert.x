@@ -117,7 +117,7 @@ public interface JsonEvent {
    * @throws java.lang.ClassCastException if the value is not a String
    * @throws java.time.format.DateTimeParseException if the String value is not a legal ISO 8601 encoded value
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   Instant instantValue();
 
   /**
@@ -161,7 +161,7 @@ public interface JsonEvent {
    * @param type the type to decode the value to
    * @return the decoded value
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   <T> T mapTo(TypeReference<T> type);
 
 }

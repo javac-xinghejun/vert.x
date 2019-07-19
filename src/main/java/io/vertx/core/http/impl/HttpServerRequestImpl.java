@@ -11,38 +11,39 @@
 
 package io.vertx.core.http.impl;
 
-import io.netty.handler.codec.http.DefaultHttpContent;
-import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.LastHttpContent;
-import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.handler.codec.http.multipart.Attribute;
 import io.netty.handler.codec.http.multipart.HttpPostRequestDecoder;
 import io.netty.handler.codec.http.multipart.InterfaceHttpData;
 import io.netty.util.CharsetUtil;
 import io.vertx.codegen.annotations.Nullable;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.CaseInsensitiveHeaders;
-import io.vertx.core.http.HttpConnection;
-import io.vertx.core.http.HttpServerFileUpload;
-import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.http.*;
 import io.vertx.core.http.HttpVersion;
-import io.vertx.core.http.ServerWebSocket;
-import io.vertx.core.http.HttpFrame;
+import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
+import io.vertx.core.spi.tracing.TagExtractor;
+import io.vertx.core.spi.tracing.VertxTracer;
+import io.vertx.core.streams.impl.InboundBuffer;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
 import javax.security.cert.X509Certificate;
 import java.net.URISyntaxException;
+
+import static io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_X_WWW_FORM_URLENCODED;
+import static io.netty.handler.codec.http.HttpHeaderValues.MULTIPART_FORM_DATA;
+import static io.vertx.core.spi.metrics.Metrics.METRICS_ENABLED;
 
 /**
  * This class is optimised for performance when used on the same event loop that is was passed to the handler with.
@@ -60,15 +61,20 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   private static final Logger log = LoggerFactory.getLogger(HttpServerRequestImpl.class);
 
   private final Http1xServerConnection conn;
-  private final HttpRequest request;
-  private final HttpServerResponse response;
+  final ContextInternal context;
 
+  private HttpRequest request;
   private io.vertx.core.http.HttpVersion version;
   private io.vertx.core.http.HttpMethod method;
   private String rawMethod;
   private String uri;
   private String path;
   private String query;
+
+  private HttpServerResponseImpl response;
+  private HttpServerRequestImpl next;
+  private Object metric;
+  private Object trace;
 
   private Handler<Buffer> dataHandler;
   private Handler<Throwable> exceptionHandler;
@@ -78,26 +84,125 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   private MultiMap headers;
   private String absoluteURI;
 
-  private NetSocket netSocket;
   private Handler<HttpServerFileUpload> uploadHandler;
   private Handler<Void> endHandler;
   private MultiMap attributes;
   private HttpPostRequestDecoder decoder;
   private boolean ended;
+  private long bytesRead;
+  private InboundBuffer<Object> pending;
+  private Buffer body;
+  private Promise<Buffer> bodyPromise;
 
-
-  HttpServerRequestImpl(Http1xServerConnection conn,
-                        HttpRequest request,
-                        HttpServerResponse response) {
+  HttpServerRequestImpl(Http1xServerConnection conn, HttpRequest request) {
     this.conn = conn;
+    this.context = conn.getContext().duplicate();
     this.request = request;
-    this.response = response;
+  }
+
+  /**
+   *
+   * @return
+   */
+  HttpRequest nettyRequest() {
+    synchronized (conn) {
+      return request;
+    }
+  }
+
+  void setRequest(HttpRequest request) {
+    synchronized (conn) {
+      this.request = request;
+    }
+  }
+
+  private InboundBuffer<Object> pendingQueue() {
+    if (pending == null) {
+      pending = new InboundBuffer<>(conn.getContext(), 8);
+      pending.drainHandler(v -> conn.doResume());
+      pending.handler(buffer -> {
+        if (buffer == InboundBuffer.END_SENTINEL) {
+          onEnd();
+        } else {
+          onData((Buffer) buffer);
+        }
+      });
+    }
+    return pending;
+  }
+
+  void handleContent(Buffer buffer) {
+    InboundBuffer<Object> queue;
+    synchronized (conn) {
+      queue = pending;
+    }
+    if (queue != null) {
+      // We queue requests if paused or a request is in progress to prevent responses being written in the wrong order
+      if (!queue.write(buffer)) {
+        // We only pause when we are actively called by the connection
+        conn.doPause();
+      }
+    } else {
+      onData(buffer);
+    }
+  }
+
+  void handleBegin(Handler<HttpServerRequest> handler) {
+    response = new HttpServerResponseImpl((VertxInternal) conn.vertx(), context, conn, request, metric);
+    if (conn.handle100ContinueAutomatically) {
+      check100();
+    }
+    handler.handle(this);
+  }
+
+  /**
+   * Enqueue a pipelined request.
+   *
+   * @param request the enqueued request
+   */
+  void enqueue(HttpServerRequestImpl request) {
+    HttpServerRequestImpl current = this;
+    while (current.next != null) {
+      current = current.next;
+    }
+    current.next = request;
+  }
+
+  /**
+   * @return the next request following this one
+   */
+  HttpServerRequestImpl next() {
+    return next;
+  }
+
+  void reportRequestBegin() {
+    if (conn.metrics != null) {
+      metric = conn.metrics.requestBegin(conn.metric(), this);
+    }
+    VertxTracer tracer = context.tracer();
+    if (tracer != null) {
+      trace = tracer.receiveRequest(context, this, method().name(), headers(), HttpUtils.SERVER_REQUEST_TAG_EXTRACTOR);
+    }
+  }
+
+  private void check100() {
+    if (HttpUtil.is100ContinueExpected(request)) {
+      conn.write100Continue();
+    }
+  }
+
+  Object metric() {
+    return metric;
+  }
+
+  Object trace() {
+    return trace;
   }
 
   @Override
   public io.vertx.core.http.HttpVersion version() {
     if (version == null) {
-      io.netty.handler.codec.http.HttpVersion nettyVersion = request.getProtocolVersion();
+      io.netty.handler.codec.http.HttpVersion nettyVersion = request.protocolVersion();
       if (nettyVersion == io.netty.handler.codec.http.HttpVersion.HTTP_1_0) {
         version = HttpVersion.HTTP_1_0;
       } else if (nettyVersion == io.netty.handler.codec.http.HttpVersion.HTTP_1_1) {
@@ -161,14 +266,26 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   }
 
   @Override
-  public HttpServerResponse response() {
+  public long bytesRead() {
+    synchronized (conn) {
+      return bytesRead;
+    }
+  }
+
+  @Override
+  public HttpServerResponseImpl response() {
     return response;
   }
 
   @Override
   public MultiMap headers() {
     if (headers == null) {
-      headers = new HeadersAdaptor(request.headers());
+      HttpHeaders reqHeaders = request.headers();
+      if (reqHeaders instanceof MultiMap) {
+        headers = (MultiMap) reqHeaders;
+      } else {
+        headers = new HeadersAdaptor(reqHeaders);
+      }
     }
     return headers;
   }
@@ -218,21 +335,22 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   @Override
   public HttpServerRequest pause() {
     synchronized (conn) {
-      if (!ended) {
-        conn.pause();
-      }
+      pendingQueue().pause();
+      return this;
+    }
+  }
+
+  @Override
+  public HttpServerRequest fetch(long amount) {
+    synchronized (conn) {
+      pendingQueue().fetch(amount);
       return this;
     }
   }
 
   @Override
   public HttpServerRequest resume() {
-    synchronized (conn) {
-      if (!ended) {
-        conn.resume();
-      }
-      return this;
-    }
+    return fetch(Long.MAX_VALUE);
   }
 
   @Override
@@ -253,7 +371,7 @@ public class HttpServerRequestImpl implements HttpServerRequest {
 
   @Override
   public boolean isSSL() {
-    return conn.isSSL();
+    return conn.isSsl();
   }
 
   @Override
@@ -285,10 +403,9 @@ public class HttpServerRequestImpl implements HttpServerRequest {
 
   @Override
   public NetSocket netSocket() {
-    if (netSocket == null) {
-      netSocket = conn.createNetSocket();
+    synchronized (conn) {
+      return response.netSocket(method() == io.vertx.core.http.HttpMethod.CONNECT);
     }
-    return netSocket;
   }
 
   @Override
@@ -314,7 +431,12 @@ public class HttpServerRequestImpl implements HttpServerRequest {
 
   @Override
   public ServerWebSocket upgrade() {
-    return conn.upgrade(this, request);
+    ServerWebSocketImpl ws = conn.createWebSocket(this);
+    if (ws == null) {
+      throw new IllegalStateException("Can't upgrade this request");
+    }
+    ws.accept();
+    return ws;
   }
 
   @Override
@@ -323,15 +445,11 @@ public class HttpServerRequestImpl implements HttpServerRequest {
       checkEnded();
       if (expect) {
         if (decoder == null) {
-          String contentType = request.headers().get(HttpHeaders.Names.CONTENT_TYPE);
+          String contentType = request.headers().get(HttpHeaderNames.CONTENT_TYPE);
           if (contentType != null) {
-            HttpMethod method = request.getMethod();
-            String lowerCaseContentType = contentType.toLowerCase();
-            boolean isURLEncoded = lowerCaseContentType.startsWith(HttpHeaders.Values.APPLICATION_X_WWW_FORM_URLENCODED);
-            if ((lowerCaseContentType.startsWith(HttpHeaders.Values.MULTIPART_FORM_DATA) || isURLEncoded) &&
-              (method.equals(HttpMethod.POST) || method.equals(HttpMethod.PUT) || method.equals(HttpMethod.PATCH)
-                || method.equals(HttpMethod.DELETE))) {
-              decoder = new HttpPostRequestDecoder(new NettyFileUploadDataFactory(conn.vertx(), this, () -> uploadHandler), request);
+            HttpMethod method = request.method();
+            if (isValidMultipartContentType(contentType) && isValidMultipartMethod(method)) {
+              decoder = new HttpPostRequestDecoder(new NettyFileUploadDataFactory(conn.getContext(), this, () -> uploadHandler), request);
             }
           }
         }
@@ -340,6 +458,16 @@ public class HttpServerRequestImpl implements HttpServerRequest {
       }
       return this;
     }
+  }
+
+  private boolean isValidMultipartContentType(String contentType) {
+    return MULTIPART_FORM_DATA.regionMatches(true, 0, contentType, 0, MULTIPART_FORM_DATA.length())
+      || APPLICATION_X_WWW_FORM_URLENCODED.regionMatches(true, 0, contentType, 0, APPLICATION_X_WWW_FORM_URLENCODED.length());
+  }
+
+  private boolean isValidMultipartMethod(HttpMethod method) {
+    return method.equals(HttpMethod.POST) || method.equals(HttpMethod.PUT) || method.equals(HttpMethod.PATCH)
+      || method.equals(HttpMethod.DELETE);
   }
 
   @Override
@@ -357,7 +485,7 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   @Override
   public boolean isEnded() {
     synchronized (conn) {
-      return ended;
+      return ended && (pending == null || (!pending.isPaused() && pending.isEmpty()));
     }
   }
 
@@ -371,8 +499,19 @@ public class HttpServerRequestImpl implements HttpServerRequest {
     return conn;
   }
 
-  void handleData(Buffer data) {
+  @Override
+  public synchronized Future<Buffer> body() {
+    if (bodyPromise == null) {
+      bodyPromise = Promise.promise();
+      body = Buffer.buffer();
+    }
+    return bodyPromise.future();
+  }
+
+  private void onData(Buffer data) {
+    Handler<Buffer> handler;
     synchronized (conn) {
+      bytesRead += data.length();
       if (decoder != null) {
         try {
           decoder.offer(new DefaultHttpContent(data.getByteBuf()));
@@ -380,50 +519,118 @@ public class HttpServerRequestImpl implements HttpServerRequest {
           handleException(e);
         }
       }
-      if (dataHandler != null) {
-        dataHandler.handle(data);
+      handler = dataHandler;
+      if (body != null) {
+        body.appendBuffer(data);
       }
+    }
+    if (handler != null) {
+      handler.handle(data);
     }
   }
 
   void handleEnd() {
+    InboundBuffer<Object> queue;
     synchronized (conn) {
       ended = true;
+      queue = pending;
+    }
+    if (queue != null) {
+      queue.write(InboundBuffer.END_SENTINEL);
+    } else {
+      onEnd();
+    }
+  }
+
+  private void onEnd() {
+    Handler<Void> handler;
+    Promise<Buffer> bodyPromise;
+    Buffer body;
+    synchronized (conn) {
       if (decoder != null) {
-        try {
-          decoder.offer(LastHttpContent.EMPTY_LAST_CONTENT);
-          while (decoder.hasNext()) {
-            InterfaceHttpData data = decoder.next();
-            if (data instanceof Attribute) {
-              Attribute attr = (Attribute) data;
-              try {
-                attributes().add(attr.getName(), attr.getValue());
-              } catch (Exception e) {
-                // Will never happen, anyway handle it somehow just in case
-                handleException(e);
-              }
-            }
+        endDecode();
+      }
+      handler = endHandler;
+      bodyPromise = this.bodyPromise;
+      body = this.body;
+    }
+    // If there have been uploads then we let the last one call the end handler once any fileuploads are complete
+    if (handler != null) {
+      handler.handle(null);
+    }
+    if (body != null) {
+      bodyPromise.tryComplete(body);
+    }
+  }
+
+  private void endDecode() {
+    try {
+      decoder.offer(LastHttpContent.EMPTY_LAST_CONTENT);
+      while (decoder.hasNext()) {
+        InterfaceHttpData data = decoder.next();
+        if (data instanceof Attribute) {
+          Attribute attr = (Attribute) data;
+          try {
+            attributes().add(attr.getName(), attr.getValue());
+          } catch (Exception e) {
+            // Will never happen, anyway handle it somehow just in case
+            handleException(e);
           }
-        } catch (HttpPostRequestDecoder.ErrorDataDecoderException e) {
-          handleException(e);
-        } catch (HttpPostRequestDecoder.EndOfDataDecoderException e) {
-          // ignore this as it is expected
-        } finally {
-          decoder.destroy();
         }
       }
-      // If there have been uploads then we let the last one call the end handler once any fileuploads are complete
-      if (endHandler != null) {
-        endHandler.handle(null);
-      }
+    } catch (HttpPostRequestDecoder.ErrorDataDecoderException e) {
+      handleException(e);
+    } catch (HttpPostRequestDecoder.EndOfDataDecoderException e) {
+      // ignore this as it is expected
+    } finally {
+      decoder.destroy();
     }
   }
 
   void handleException(Throwable t) {
+    Handler<Throwable> handler = null;
+    HttpServerResponseImpl resp = null;
+    InterfaceHttpData upload = null;
+    Promise<Buffer> bodyPromise;
+    Buffer body;
     synchronized (conn) {
-      if (exceptionHandler != null) {
-        exceptionHandler.handle(t);
+      if (!isEnded()) {
+        handler = exceptionHandler;
+        if (decoder != null) {
+          upload = decoder.currentPartialHttpData();
+        }
       }
+      if (!response.ended()) {
+        if (METRICS_ENABLED) {
+          reportRequestReset(t);
+        }
+        resp = response;
+      }
+      bodyPromise = this.bodyPromise;
+      this.bodyPromise = null;
+      this.body = null;
+    }
+    if (resp != null) {
+      resp.handleException(t);
+    }
+    if (upload instanceof NettyFileUpload) {
+      ((NettyFileUpload)upload).handleException(t);
+    }
+    if (handler != null) {
+      handler.handle(t);
+    }
+    if (bodyPromise != null) {
+      bodyPromise.tryFail(t);
+    }
+  }
+
+  private void reportRequestReset(Throwable err) {
+    if (conn.metrics != null) {
+      conn.metrics.requestReset(metric);
+    }
+    VertxTracer tracer = context.tracer();
+    if (tracer != null) {
+      tracer.sendResponse(context, null, trace, err, TagExtractor.empty());
     }
   }
 
@@ -433,7 +640,7 @@ public class HttpServerRequestImpl implements HttpServerRequest {
   }
 
   private void checkEnded() {
-    if (ended) {
+    if (isEnded()) {
       throw new IllegalStateException("Request has already been read");
     }
   }
@@ -452,4 +659,8 @@ public class HttpServerRequestImpl implements HttpServerRequest {
     return QueryStringDecoder.decodeComponent(str, CharsetUtil.UTF_8);
   }
 
+  @Override
+  public HttpServerRequest streamPriorityHandler(Handler<StreamPriority> handler) {
+    return this;
+  }
 }

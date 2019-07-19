@@ -15,7 +15,7 @@ import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.codegen.annotations.VertxGen;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.VertxThread;
 import io.vertx.core.json.JsonObject;
 
 import java.util.List;
@@ -66,7 +66,8 @@ public interface Context {
    * @return true if current thread is a worker thread, false otherwise
    */
   static boolean isOnWorkerThread() {
-    return ContextImpl.isOnWorkerThread();
+    Thread t = Thread.currentThread();
+    return t instanceof VertxThread && ((VertxThread) t).isWorker();
   }
 
   /**
@@ -78,7 +79,8 @@ public interface Context {
    * @return true if current thread is a worker thread, false otherwise
    */
   static boolean isOnEventLoopThread() {
-    return ContextImpl.isOnEventLoopThread();
+    Thread t = Thread.currentThread();
+    return t instanceof VertxThread && !((VertxThread) t).isWorker();
   }
 
   /**
@@ -87,7 +89,7 @@ public interface Context {
    * @return true if current thread is a Vert.x thread, false otherwise
    */
   static boolean isOnVertxThread() {
-    return ContextImpl.isOnVertxThread();
+    return Thread.currentThread() instanceof VertxThread;
   }
 
   /**
@@ -106,8 +108,17 @@ public interface Context {
    * (e.g. on the original event loop of the caller).
    * <p>
    * A {@code Future} instance is passed into {@code blockingCodeHandler}. When the blocking code successfully completes,
-   * the handler should call the {@link Future#complete} or {@link Future#complete(Object)} method, or the {@link Future#fail}
+   * the handler should call the {@link Promise#complete} or {@link Promise#complete(Object)} method, or the {@link Promise#fail}
    * method if it failed.
+   * <p>
+   * The blocking code should block for a reasonable amount of time (i.e no more than a few seconds). Long blocking operations
+   * or polling operations (i.e a thread that spin in a loop polling events in a blocking fashion) are precluded.
+   * <p>
+   * When the blocking operation lasts more than the 10 seconds, a message will be printed on the console by the
+   * blocked thread checker.
+   * <p>
+   * Long blocking operations should use a dedicated thread managed by the application, which can interact with
+   * verticles using the event-bus or {@link Context#runOnContext(Handler)}
    *
    * @param blockingCodeHandler  handler representing the blocking code to run
    * @param resultHandler  handler that will be called when the blocking code is complete
@@ -116,7 +127,7 @@ public interface Context {
    *                 guarantees
    * @param <T> the type of the result
    */
-  <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> resultHandler);
+  <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<@Nullable T>> resultHandler);
 
   /**
    * Invoke {@link #executeBlocking(Handler, boolean, Handler)} with order = true.
@@ -124,7 +135,25 @@ public interface Context {
    * @param resultHandler  handler that will be called when the blocking code is complete
    * @param <T> the type of the result
    */
-  <T> void executeBlocking(Handler<Future<T>> blockingCodeHandler, Handler<AsyncResult<T>> resultHandler);
+  <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, Handler<AsyncResult<@Nullable T>> resultHandler);
+
+  /**
+   * Same as {@link #executeBlocking(Handler, boolean, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
+    Promise<T> promise = Promise.promise();
+    executeBlocking(blockingCodeHandler, ordered, promise);
+    return promise.future();
+  }
+
+  /**
+   * Same as {@link #executeBlocking(Handler, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler) {
+    Promise<T> promise = Promise.promise();
+    executeBlocking(blockingCodeHandler, promise);
+    return promise.future();
+  }
 
   /**
    * If the context is associated with a Verticle deployment, this returns the deployment ID of that deployment.
@@ -169,13 +198,6 @@ public interface Context {
   boolean isWorkerContext();
 
   /**
-   * Is the current context a multi-threaded worker context?
-   *
-   * @return true if the current context is a multi-threaded worker context, false otherwise
-   */
-  boolean isMultiThreadedWorkerContext();
-
-  /**
    * Get some data from the context.
    *
    * @param key  the key of the data
@@ -203,6 +225,33 @@ public interface Context {
   boolean remove(String key);
 
   /**
+   * Get some local data from the context.
+   *
+   * @param key  the key of the data
+   * @param <T>  the type of the data
+   * @return the data
+   */
+  <T> T getLocal(String key);
+
+  /**
+   * Put some local data in the context.
+   * <p>
+   * This can be used to share data between different handlers that share a context
+   *
+   * @param key  the key of the data
+   * @param value  the data
+   */
+  void putLocal(String key, Object value);
+
+  /**
+   * Remove some local data from the context.
+   *
+   * @param key  the key to remove
+   * @return true if removed successfully, false otherwise
+   */
+  boolean removeLocal(String key);
+
+  /**
    * @return The Vertx instance that created the context
    */
   Vertx owner();
@@ -227,14 +276,14 @@ public interface Context {
   /**
    * @return the current exception handler of this context
    */
-  @Nullable
   @GenIgnore
+  @Nullable
   Handler<Throwable> exceptionHandler();
 
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   void addCloseHook(Closeable hook);
 
-  @GenIgnore
-  void removeCloseHook(Closeable hook);
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  boolean removeCloseHook(Closeable hook);
 
 }

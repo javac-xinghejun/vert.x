@@ -12,6 +12,8 @@
 package io.vertx.core.eventbus.impl.clustered;
 
 import io.netty.util.CharsetUtil;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.MessageCodec;
@@ -19,8 +21,8 @@ import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.eventbus.impl.EventBusImpl;
 import io.vertx.core.eventbus.impl.MessageImpl;
 import io.vertx.core.http.CaseInsensitiveHeaders;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.impl.ServerID;
 
 import java.util.List;
@@ -41,17 +43,18 @@ public class ClusteredMessage<U, V> extends MessageImpl<U, V> {
   private int headersPos;
   private boolean fromWire;
 
-  public ClusteredMessage() {
+  public ClusteredMessage(boolean src, EventBusImpl bus) {
+    super(src, bus);
   }
 
   public ClusteredMessage(ServerID sender, String address, String replyAddress, MultiMap headers, U sentBody,
-                          MessageCodec<U, V> messageCodec, boolean send, EventBusImpl bus) {
-    super(address, replyAddress, headers, sentBody, messageCodec, send, bus);
+                          MessageCodec<U, V> messageCodec, boolean send, boolean src, EventBusImpl bus, Handler<AsyncResult<Void>> writeHandler) {
+    super(address, replyAddress, headers, sentBody, messageCodec, send, src, bus, writeHandler);
     this.sender = sender;
   }
 
-  protected ClusteredMessage(ClusteredMessage<U, V> other) {
-    super(other);
+  protected ClusteredMessage(ClusteredMessage<U, V> other, boolean src) {
+    super(other, src);
     this.sender = other.sender;
     if (other.sentBody == null) {
       this.wireBuffer = other.wireBuffer;
@@ -61,8 +64,8 @@ public class ClusteredMessage<U, V> extends MessageImpl<U, V> {
     this.fromWire = other.fromWire;
   }
 
-  public ClusteredMessage<U, V> copyBeforeReceive() {
-    return new ClusteredMessage<>(this);
+  public ClusteredMessage<U, V> copyBeforeReceive(boolean src) {
+    return new ClusteredMessage<>(this, src);
   }
 
   @Override

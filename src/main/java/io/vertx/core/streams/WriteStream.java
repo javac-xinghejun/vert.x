@@ -14,13 +14,16 @@ package io.vertx.core.streams;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 
 /**
  *
  * Represents a stream of data that can be written to.
  * <p>
- * Any class that implements this interface can be used by a {@link Pump} to pump data from a {@code ReadStream}
+ * Any class that implements this interface can be used by a {@link Pipe} to pipe data from a {@code ReadStream}
  * to it.
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -43,24 +46,62 @@ public interface WriteStream<T> extends StreamBase {
    * check the {@link #writeQueueFull} method before writing. This is done automatically if using a {@link Pump}.
    *
    * @param data  the data to write
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the result
    */
-  @Fluent
-  WriteStream<T> write(T data);
+  Future<Void> write(T data);
+
+  /**
+   * Same as {@link #write(T)} but with an {@code handler} called when the operation completes
+   */
+  void write(T data, Handler<AsyncResult<Void>> handler);
 
   /**
    * Ends the stream.
    * <p>
    * Once the stream has ended, it cannot be used any more.
+   *
+   * @return a future completed with the result
    */
-  void end();
+  default Future<Void> end() {
+    Promise<Void> promise = Promise.promise();
+    end(promise);
+    return promise.future();
+  }
+
+  /**
+   * Same as {@link #end()} but with an {@code handler} called when the operation completes
+   */
+  void end(Handler<AsyncResult<Void>> handler);
 
   /**
    * Same as {@link #end()} but writes some data to the stream before ending.
+   *
+   * @implSpec The default default implementation calls sequentially {@link #write(Object)} then {@link #end()}
+   * @apiNote Implementations might want to perform a single operation
+   * @param data the data to write
+   * @return a future completed with the result
    */
-  default void end(T t) {
-    write(t);
-    end();
+  default Future<Void> end(T data) {
+    Promise<Void> provide = Promise.promise();
+    end(data, provide);
+    return provide.future();
+  }
+
+  /**
+   * Same as {@link #end(T)} but with an {@code handler} called when the operation completes
+   */
+  default void end(T data, Handler<AsyncResult<Void>> handler) {
+    if (handler != null) {
+      write(data, ar -> {
+        if (ar.succeeded()) {
+          end(handler);
+        } else {
+          handler.handle(ar);
+        }
+      });
+    } else {
+      end(data);
+    }
   }
 
   /**

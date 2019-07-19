@@ -21,8 +21,11 @@ import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.StreamPriority;
 import io.vertx.core.http.StreamResetException;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 
@@ -46,8 +49,8 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   private Handler<Buffer> dataHandler;
   private Handler<Void> drainHandler;
 
-  public VertxHttp2NetSocket(C conn, Http2Stream stream, boolean writable) {
-    super(conn, stream, writable);
+  public VertxHttp2NetSocket(C conn, ContextInternal context, Http2Stream stream, boolean writable) {
+    super(conn, context, stream, writable);
   }
 
   // Stream impl
@@ -55,9 +58,10 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   @Override
   void handleEnd(MultiMap trailers) {
     try {
-      if (endHandler != null) {
+      Handler<Void> handler = endHandler();
+      if (handler != null) {
         // Give opportunity to send a last chunk
-        endHandler.handle(null);
+        handler.handle(null);
       }
     } finally {
       end();
@@ -66,8 +70,9 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   void handleData(Buffer buf) {
-    if (dataHandler != null) {
-      dataHandler.handle(buf);
+    Handler<Buffer> handler = handler();
+    if (handler != null) {
+      handler.handle(buf);
     }
   }
 
@@ -78,33 +83,46 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   void handleException(Throwable cause) {
-    if (exceptionHandler != null) {
-      exceptionHandler.handle(cause);
+    Handler<Throwable> handler = exceptionHandler();
+    if (handler != null) {
+      handler.handle(cause);
     }
   }
 
   @Override
   void handleClose() {
-    if (closeHandler != null) {
-      closeHandler.handle(null);
+    super.handleClose();
+    Handler<Void> handler = closeHandler();
+    if (handler != null) {
+      handler.handle(null);
     }
   }
 
   @Override
   void handleInterestedOpsChanged() {
-    Handler<Void> handler = this.drainHandler;
+    Handler<Void> handler = drainHandler();
     if (handler != null && !writeQueueFull()) {
       handler.handle(null);
     }
   }
 
-  // NetSocket impl
+  @Override
+  void handlePriorityChange(StreamPriority streamPriority) {
+  }
+
+// NetSocket impl
 
   @Override
   public NetSocket exceptionHandler(Handler<Throwable> handler) {
     synchronized (conn) {
       exceptionHandler = handler;
-      return this;
+    }
+    return this;
+  }
+
+  Handler<Throwable> exceptionHandler() {
+    synchronized (conn) {
+      return exceptionHandler;
     }
   }
 
@@ -112,33 +130,53 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   public NetSocket handler(Handler<Buffer> handler) {
     synchronized (conn) {
       dataHandler = handler;
-      return this;
+    }
+    return this;
+  }
+
+  Handler<Buffer> handler() {
+    synchronized (conn) {
+      return dataHandler;
     }
   }
 
   @Override
+  public NetSocket fetch(long amount) {
+    doFetch(amount);
+    return this;
+  }
+
+  @Override
   public NetSocket pause() {
+    doPause();
     return this;
   }
 
   @Override
   public NetSocket resume() {
-    return this;
+    return fetch(Long.MAX_VALUE);
   }
 
   @Override
   public NetSocket endHandler(Handler<Void> handler) {
     synchronized (conn) {
       endHandler = handler;
-      return this;
+    }
+    return this;
+  }
+
+  Handler<Void> endHandler() {
+    synchronized (conn) {
+      return endHandler;
     }
   }
 
   @Override
-  public NetSocket write(Buffer data) {
+  public Future<Void> write(Buffer data) {
     synchronized (conn) {
-      writeData(data.getByteBuf(), false);
-      return this;
+      Promise<Void> promise = Promise.promise();
+      writeData(data.getByteBuf(), false, promise);
+      return promise.future();
     }
   }
 
@@ -151,7 +189,13 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   public NetSocket drainHandler(Handler<Void> handler) {
     synchronized (conn) {
       drainHandler = handler;
-      return this;
+    }
+    return this;
+  }
+
+  Handler<Void> drainHandler() {
+    synchronized (conn) {
+      return drainHandler;
     }
   }
 
@@ -167,22 +211,33 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   }
 
   @Override
-  public NetSocket write(String str) {
-    return write(str, null);
+  public Future<Void> write(String str) {
+    Promise<Void> promise = Promise.promise();
+    write(str, null, promise);
+    return promise.future();
   }
 
   @Override
-  public NetSocket write(String str, String enc) {
-    synchronized (conn) {
-      Charset cs = enc != null ? Charset.forName(enc) : CharsetUtil.UTF_8;
-      writeData(Unpooled.copiedBuffer(str, cs), false);
-      return this;
-    }
+  public void write(String str, Handler<AsyncResult<Void>> handler) {
+    write(str, null, handler);
   }
 
   @Override
-  public NetSocket sendFile(String filename, long offset, long length) {
-    return sendFile(filename, offset, length, null);
+  public Future<Void> write(String str, String enc) {
+    Promise<Void> promise = Promise.promise();
+    write(str, enc, promise);
+    return promise.future();
+  }
+
+  @Override
+  public void write(String str, String enc, Handler<AsyncResult<Void>> handler) {
+    Charset cs = enc != null ? Charset.forName(enc) : CharsetUtil.UTF_8;
+    writeData(Unpooled.copiedBuffer(str, cs), false, handler);
+  }
+
+  @Override
+  public void write(Buffer message, Handler<AsyncResult<Void>> handler) {
+    conn.handler.writeData(stream, message.getByteBuf(), false, handler);
   }
 
   @Override
@@ -214,8 +269,8 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
       long contentLength = Math.min(length, file.length() - offset);
 
-      Future<Long> result = Future.future();
-      result.setHandler(ar -> {
+      Promise<Long> result = Promise.promise();
+      result.future().setHandler(ar -> {
         if (resultHandler != null) {
           resultCtx.runOnContext(v -> {
             resultHandler.handle(Future.succeededFuture());
@@ -250,39 +305,53 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   }
 
   @Override
-  public void end() {
-    synchronized (conn) {
-      writeData(Unpooled.EMPTY_BUFFER, true);
-    }
+  public Future<Void> end() {
+    Promise<Void> promise = Promise.promise();
+    end(promise);
+    return promise.future();
   }
 
   @Override
-  public void end(Buffer buffer) {
-    synchronized (conn) {
-      writeData(buffer.getByteBuf(), true);
-    }
+  public void end(Buffer buffer, Handler<AsyncResult<Void>> handler) {
+    writeData(buffer.getByteBuf(), true, handler);
   }
 
   @Override
-  public void close() {
-    end();
+  public void end(Handler<AsyncResult<Void>> handler) {
+    writeData(Unpooled.EMPTY_BUFFER, true, handler);
+  }
+
+  @Override
+  public Future<Void> close() {
+    return end();
+  }
+
+  @Override
+  public void close(Handler<AsyncResult<Void>> handler) {
+    end(handler);
   }
 
   @Override
   public NetSocket closeHandler(@Nullable Handler<Void> handler) {
     synchronized (conn) {
       closeHandler = handler;
-      return this;
+    }
+    return this;
+  }
+
+  Handler<Void> closeHandler() {
+    synchronized (conn) {
+      return closeHandler;
     }
   }
 
   @Override
-  public NetSocket upgradeToSsl(Handler<Void> handler) {
+  public NetSocket upgradeToSsl(Handler<AsyncResult<Void>> handler) {
     throw new UnsupportedOperationException("Cannot upgrade HTTP/2 stream to SSL");
   }
 
   @Override
-  public NetSocket upgradeToSsl(String serverName, Handler<Void> handler) {
+  public NetSocket upgradeToSsl(String serverName, Handler<AsyncResult<Void>> handler) {
     throw new UnsupportedOperationException("Cannot upgrade HTTP/2 stream to SSL");
   }
 

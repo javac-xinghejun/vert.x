@@ -14,10 +14,10 @@ import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.file.AsyncFile;
 import io.vertx.core.file.OpenOptions;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 
 import java.util.Objects;
 
@@ -66,7 +66,7 @@ public class WindowsFileSystem extends FileSystemImpl {
 
   @Override
   protected AsyncFile doOpen(String path, OpenOptions options,
-                             ContextImpl context) {
+                             ContextInternal context) {
     logInternal(options.getPerms());
     return new AsyncFileImpl(vertx, path, options, context);
   }

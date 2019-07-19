@@ -11,35 +11,18 @@
 
 package io.vertx.core.dns.impl;
 
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoop;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.*;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.InternetProtocolFamily;
-import io.netty.handler.codec.dns.DatagramDnsQuery;
-import io.netty.handler.codec.dns.DatagramDnsQueryEncoder;
-import io.netty.handler.codec.dns.DatagramDnsResponseDecoder;
-import io.netty.handler.codec.dns.DefaultDnsQuestion;
-import io.netty.handler.codec.dns.DnsRecord;
-import io.netty.handler.codec.dns.DnsRecordType;
-import io.netty.handler.codec.dns.DnsResponse;
-import io.netty.handler.codec.dns.DnsSection;
+import io.netty.handler.codec.dns.*;
+import io.netty.handler.logging.LoggingHandler;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
-import io.vertx.core.VertxException;
-import io.vertx.core.dns.DnsClient;
-import io.vertx.core.dns.DnsException;
+import io.vertx.core.*;
+import io.vertx.core.dns.*;
 import io.vertx.core.dns.DnsResponseCode;
-import io.vertx.core.dns.MxRecord;
-import io.vertx.core.dns.SrvRecord;
 import io.vertx.core.dns.impl.decoder.RecordDecoder;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.net.impl.PartialPooledByteBufAllocator;
 import io.vertx.core.net.impl.transport.Transport;
@@ -64,31 +47,35 @@ public final class DnsClientImpl implements DnsClient {
   private final Vertx vertx;
   private final IntObjectMap<Query> inProgressMap = new IntObjectHashMap<>();
   private final InetSocketAddress dnsServer;
-  private final ContextImpl actualCtx;
+  private final ContextInternal actualCtx;
   private final DatagramChannel channel;
-  private final long timeoutMillis;
+  private final DnsClientOptions options;
 
-  public DnsClientImpl(VertxInternal vertx, int port, String host, long timeoutMillis) {
-    if (timeoutMillis < 0) {
-      throw new IllegalArgumentException("DNS client timeout " + timeoutMillis + " must be > 0");
+  public DnsClientImpl(VertxInternal vertx, DnsClientOptions options) {
+    Objects.requireNonNull(options, "no null options accepted");
+    Objects.requireNonNull(options.getHost(), "no null host accepted");
+
+    this.options = new DnsClientOptions(options);
+
+    ContextInternal creatingContext = vertx.getContext();
+
+    this.dnsServer = new InetSocketAddress(options.getHost(), options.getPort());
+    if (this.dnsServer.isUnresolved()) {
+    	throw new IllegalArgumentException("Cannot resolve the host to a valid ip address");
     }
-
-    ContextImpl creatingContext = vertx.getContext();
-    if (creatingContext != null && creatingContext.isMultiThreadedWorkerContext()) {
-      throw new IllegalStateException("Cannot use DnsClient in a multi-threaded worker verticle");
-    }
-
-    this.dnsServer = new InetSocketAddress(host, port);
     this.vertx = vertx;
-    this.timeoutMillis = timeoutMillis;
 
     Transport transport = vertx.transport();
     actualCtx = vertx.getOrCreateContext();
-    channel = transport.datagramChannel(InternetProtocolFamily.IPv4);
+    channel = transport.datagramChannel(this.dnsServer.getAddress() instanceof Inet4Address ? InternetProtocolFamily.IPv4 : InternetProtocolFamily.IPv6);
     channel.config().setOption(ChannelOption.DATAGRAM_CHANNEL_ACTIVE_ON_REGISTRATION, true);
-    channel.config().setMaxMessagesPerRead(1);
+    MaxMessagesRecvByteBufAllocator bufAllocator = channel.config().getRecvByteBufAllocator();
+    bufAllocator.maxMessagesPerRead(1);
     channel.config().setAllocator(PartialPooledByteBufAllocator.INSTANCE);
     actualCtx.nettyEventLoop().register(channel);
+    if (options.getLogActivity()) {
+      channel.pipeline().addLast("logging", new LoggingHandler());
+    }
     channel.pipeline().addLast(new DatagramDnsQueryEncoder());
     channel.pipeline().addLast(new DatagramDnsResponseDecoder());
     channel.pipeline().addLast(new SimpleChannelInboundHandler<DnsResponse>() {
@@ -249,27 +236,29 @@ public final class DnsClientImpl implements DnsClient {
   private class Query<T> {
 
     final DatagramDnsQuery msg;
-    final Future<List<T>> fut;
+    final Promise<List<T>> promise;
     final String name;
     final DnsRecordType[] types;
     long timerID;
 
     public Query(String name, DnsRecordType[] types, Handler<AsyncResult<List<T>>> handler) {
-      this.msg = new DatagramDnsQuery(null, dnsServer, ThreadLocalRandom.current().nextInt()).setRecursionDesired(true);
+      Promise<List<T>> promise = Promise.promise();
+      promise.future().setHandler(handler);
+      this.msg = new DatagramDnsQuery(null, dnsServer, ThreadLocalRandom.current().nextInt()).setRecursionDesired(options.isRecursionDesired());
       for (DnsRecordType type: types) {
         msg.addRecord(DnsSection.QUESTION, new DefaultDnsQuestion(name, type, DnsRecord.CLASS_IN));
       }
-      this.fut = Future.<List<T>>future().setHandler(handler);
+      this.promise = promise;
       this.types = types;
       this.name = name;
     }
 
-    void fail(Throwable cause) {
+    private void fail(Throwable cause) {
       inProgressMap.remove(msg.id());
       if (timerID >= 0) {
         vertx.cancelTimer(timerID);
       }
-      actualCtx.executeFromIO(() -> fut.tryFail(cause));
+      promise.tryFail(cause);
     }
 
     void handle(DnsResponse msg) {
@@ -291,23 +280,25 @@ public final class DnsClientImpl implements DnsClient {
         if (records.size() > 0 && (records.get(0) instanceof MxRecordImpl || records.get(0) instanceof SrvRecordImpl)) {
           Collections.sort((List) records);
         }
-        actualCtx.executeFromIO(() -> {
-          fut.tryComplete(records);
+        actualCtx.executeFromIO(v -> {
+          promise.tryComplete(records);
         });
       } else {
-        fail(new DnsException(code));
+        actualCtx.executeFromIO(new DnsException(code), this::fail);
       }
     }
 
     void run() {
       inProgressMap.put(msg.id(), this);
-      timerID = vertx.setTimer(timeoutMillis, id -> {
+      timerID = vertx.setTimer(options.getQueryTimeout(), id -> {
         timerID = -1;
-        fail(new VertxException("DNS query timeout for " + name));
+        actualCtx.runOnContext(v -> {
+          fail(new VertxException("DNS query timeout for " + name));
+        });
       });
       channel.writeAndFlush(msg).addListener((ChannelFutureListener) future -> {
         if (!future.isSuccess()) {
-          fail(future.cause());
+          actualCtx.executeFromIO(future.cause(), this::fail);
         }
       });
     }

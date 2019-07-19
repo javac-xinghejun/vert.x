@@ -15,8 +15,8 @@ import io.vertx.core.cli.CLIException;
 import io.vertx.core.cli.annotations.Description;
 import io.vertx.core.cli.annotations.Name;
 import io.vertx.core.cli.annotations.Summary;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.spi.launcher.DefaultCommand;
 
 import java.io.IOException;
@@ -51,7 +51,7 @@ public class VersionCommand extends DefaultCommand {
     if (version != null) {
       return version;
     }
-    try (InputStream is = VersionCommand.class.getClassLoader().getResourceAsStream("vertx-version.txt")) {
+    try (InputStream is = VersionCommand.class.getClassLoader().getResourceAsStream("META-INF/vertx/vertx-version.txt")) {
       if (is == null) {
         throw new IllegalStateException("Cannot find vertx-version.txt on classpath");
       }

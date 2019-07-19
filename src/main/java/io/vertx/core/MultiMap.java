@@ -43,7 +43,7 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
     return new CaseInsensitiveHeaders();
   }
 
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   String get(CharSequence name);
 
   /**
@@ -67,7 +67,7 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #getAll(String)} but accepting a {@code CharSequence} as a parameter
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   List<String> getAll(CharSequence name);
 
   /**
@@ -76,7 +76,7 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
    * @return A immutable {@link java.util.List} of the name-value entries, which will be
    *         empty if no pairs are found
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   List<Map.Entry<String, String>> entries();
 
   /**
@@ -90,7 +90,7 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #contains(String)} but accepting a {@code CharSequence} as a parameter
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   boolean contains(CharSequence name);
 
   /**
@@ -110,7 +110,7 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #contains(String, String, boolean)} but accepting {@code CharSequence} parameters.
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   default boolean contains(CharSequence name, CharSequence value, boolean caseInsensitive) {
     Predicate<String> predicate;
     if (caseInsensitive) {
@@ -147,7 +147,8 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #add(String, String)} but accepting {@code CharSequence} as parameters
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap add(CharSequence name, CharSequence value);
 
   /**
@@ -157,13 +158,15 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
    * @param values The values
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap add(String name, Iterable<String> values);
 
   /**
    * Like {@link #add(String, Iterable)} but accepting {@code CharSequence} as parameters
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap add(CharSequence name, Iterable<CharSequence> values);
 
   /**
@@ -179,7 +182,8 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
    *
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap addAll(Map<String, String> headers);
 
   /**
@@ -197,7 +201,8 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #set(String, String)} but accepting {@code CharSequence} as parameters
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap set(CharSequence name, CharSequence value);
 
   /**
@@ -207,13 +212,15 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
    * @param values The values of the headers being set
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap set(String name, Iterable<String> values);
 
   /**
    * Like {@link #set(String, Iterable)} but accepting {@code CharSequence} as parameters
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap set(CharSequence name, Iterable<CharSequence> values);
 
   /**
@@ -229,7 +236,8 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
    *
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap setAll(Map<String, String> headers);
 
  /**
@@ -244,7 +252,8 @@ public interface MultiMap extends Iterable<Map.Entry<String, String>> {
   /**
    * Like {@link #remove(String)} but accepting {@code CharSequence} as parameters
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   MultiMap remove(CharSequence name);
 
   /**

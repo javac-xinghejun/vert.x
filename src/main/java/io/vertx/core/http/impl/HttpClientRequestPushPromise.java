@@ -11,17 +11,15 @@
 
 package io.vertx.core.http.impl;
 
-import io.netty.handler.codec.http2.Http2Exception;
 import io.netty.handler.codec.http2.Http2Stream;
 import io.vertx.codegen.annotations.Nullable;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.HttpClientRequest;
-import io.vertx.core.http.HttpClientResponse;
-import io.vertx.core.http.HttpConnection;
-import io.vertx.core.http.HttpMethod;
-import io.vertx.core.http.HttpVersion;
+import io.vertx.core.http.*;
+import io.vertx.core.net.SocketAddress;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -32,7 +30,6 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   private final Http2ClientConnection.Http2ClientStream stream;
   private final String rawMethod;
   private final MultiMap headers;
-  private Handler<HttpClientResponse> respHandler;
 
   public HttpClientRequestPushPromise(
       Http2ClientConnection conn,
@@ -44,10 +41,10 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
       String uri,
       String host,
       int port,
-      MultiMap headers) throws Http2Exception {
-    super(client, ssl, method, host, port, uri);
+      MultiMap headers) {
+    super(client, ssl, method, SocketAddress.inetSocketAddress(port, host), host, port, uri);
     this.conn = conn;
-    this.stream = new Http2ClientConnection.Http2ClientStream(conn, this, stream, false);
+    this.stream = new Http2ClientConnection.Http2ClientStream(conn, conn.getContext(), this, stream, false);
     this.rawMethod = rawMethod;
     this.headers = headers;
   }
@@ -57,29 +54,13 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  protected Object getLock() {
-    return this; //
+  void handleResponse(HttpClientResponse resp, long timeoutMs) {
+    responsePromise.complete(resp);
   }
 
   @Override
-  protected void doHandleResponse(HttpClientResponseImpl resp, long timeoutMs) {
-    synchronized (getLock()) {
-      if (respHandler != null) {
-        respHandler.handle(resp);
-      }
-    }
-  }
-
-  @Override
-  protected void checkComplete() {
-  }
-
-  @Override
-  public HttpClientRequest handler(Handler<HttpClientResponse> handler) {
-    synchronized (getLock()) {
-      respHandler = handler;
-      return this;
-    }
+  public HttpClientRequest exceptionHandler(Handler<Throwable> handler) {
+    return this;
   }
 
   @Override
@@ -93,11 +74,9 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public boolean reset(long code) {
-    synchronized (conn) {
-      stream.reset(code);
-      return true;
-    }
+  boolean reset(Throwable cause) {
+    stream.reset(cause);
+    return true;
   }
 
   @Override
@@ -127,7 +106,7 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
 
   @Override
   public String getHost() {
-    return host;
+    return server.host();
   }
 
   @Override
@@ -136,7 +115,7 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public HttpClientRequest write(Buffer data) {
+  public Future<Void> write(Buffer data) {
     throw new IllegalStateException();
   }
 
@@ -151,22 +130,12 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public HttpClientRequest pause() {
-    throw new IllegalStateException();
-  }
-
-  @Override
-  public HttpClientRequest resume() {
-    throw new IllegalStateException();
-  }
-
-  @Override
-  public HttpClientRequest endHandler(Handler<Void> endHandler) {
-    throw new IllegalStateException();
-  }
-
-  @Override
   public HttpClientRequest setFollowRedirects(boolean followRedirect) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public HttpClientRequest setMaxRedirects(int maxRedirects) {
     throw new IllegalStateException();
   }
 
@@ -201,12 +170,27 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public HttpClientRequest write(String chunk) {
+  public Future<Void> write(String chunk) {
     throw new IllegalStateException();
   }
 
   @Override
-  public HttpClientRequest write(String chunk, String enc) {
+  public Future<Void> write(String chunk, String enc) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void write(String chunk, Handler<AsyncResult<Void>> handler) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void write(String chunk, String enc, Handler<AsyncResult<Void>> handler) {
     throw new IllegalStateException();
   }
 
@@ -226,17 +210,32 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public void end(String chunk) {
+  public Future<Void> end(String chunk) {
     throw new IllegalStateException();
   }
 
   @Override
-  public void end(String chunk, String enc) {
+  public void end(String chunk, Handler<AsyncResult<Void>> handler) {
     throw new IllegalStateException();
   }
 
   @Override
-  public void end(Buffer chunk) {
+  public Future<Void> end(String chunk, String enc) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void end(String chunk, String enc, Handler<AsyncResult<Void>> handler) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public Future<Void> end(Buffer chunk) {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void end(Buffer chunk, Handler<AsyncResult<Void>> handler) {
     throw new IllegalStateException();
   }
 
@@ -246,13 +245,23 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
   }
 
   @Override
-  public void end() {
+  public Future<Void> end() {
+    throw new IllegalStateException();
+  }
+
+  @Override
+  public void end(Handler<AsyncResult<Void>> handler) {
     throw new IllegalStateException();
   }
 
   @Override
   public boolean writeQueueFull() {
     throw new IllegalStateException();
+  }
+
+  @Override
+  public StreamPriority getStreamPriority() {
+    return stream.priority();
   }
 
   @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2018 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -11,8 +11,8 @@
 
 package io.vertx.core.spi;
 
-import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
+import io.vertx.core.json.JsonObject;
 import io.vertx.core.metrics.MetricsOptions;
 import io.vertx.core.spi.metrics.VertxMetrics;
 
@@ -28,16 +28,15 @@ public interface VertxMetricsFactory {
    *
    * No specific thread and context can be expected when this method is called.
    *
-   * @param vertx the vertx instance
    * @param options the metrics configuration option
    * @return the metrics implementation
    */
-  VertxMetrics metrics(Vertx vertx, VertxOptions options);
+  VertxMetrics metrics(VertxOptions options);
 
   /**
-   * Create an empty metrics options. Providers can override this method to provide a custom metrics options subclass
-   * that exposes custom configuration. It is used by the {@link io.vertx.core.Starter} class when
-   * creating new options when building a CLI vert.x
+   * Create an empty metrics options.
+   * Providers can override this method to provide a custom metrics options subclass that exposes custom configuration.
+   * It is used by the {@link io.vertx.core.Launcher} class when creating new options when building a CLI Vert.x.
    *
    * @return new metrics options
    */
@@ -45,4 +44,15 @@ public interface VertxMetricsFactory {
     return new MetricsOptions();
   }
 
+  /**
+   * Create metrics options from the provided {@code jsonObject}.
+   * Providers can override this method to provide a custom metrics options subclass that exposes custom configuration.
+   * It is used by the {@link io.vertx.core.Launcher} class when creating new options when building a CLI Vert.x.
+   *
+   * @param jsonObject json provided by the user
+   * @return new metrics options
+   */
+  default MetricsOptions newOptions(JsonObject jsonObject) {
+    return new MetricsOptions(jsonObject);
+  }
 }

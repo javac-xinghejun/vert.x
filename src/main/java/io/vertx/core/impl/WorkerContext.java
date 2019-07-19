@@ -12,21 +12,22 @@
 package io.vertx.core.impl;
 
 import io.vertx.core.Handler;
-import io.vertx.core.json.JsonObject;
+import io.vertx.core.spi.metrics.PoolMetrics;
+import io.vertx.core.spi.tracing.VertxTracer;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
-public class WorkerContext extends ContextImpl {
+class WorkerContext extends ContextImpl {
 
-  public WorkerContext(VertxInternal vertx, WorkerPool internalBlockingPool, WorkerPool workerPool, String deploymentID,
-                       JsonObject config, ClassLoader tccl) {
-    super(vertx, internalBlockingPool, workerPool, deploymentID, config, tccl);
+  WorkerContext(VertxInternal vertx, VertxTracer<?, ?> tracer, WorkerPool internalBlockingPool, WorkerPool workerPool, Deployment deployment,
+                ClassLoader tccl) {
+    super(vertx, tracer, internalBlockingPool, workerPool, deployment, tccl);
   }
 
   @Override
-  public void executeAsync(Handler<Void> task) {
-    orderedTasks.execute(wrapTask(null, task, true, workerPool.metrics()), workerPool.executor());
+  void executeAsync(Handler<Void> task) {
+    execute(null, task);
   }
 
   @Override
@@ -34,21 +35,76 @@ public class WorkerContext extends ContextImpl {
     return false;
   }
 
-  @Override
-  public boolean isMultiThreadedWorkerContext() {
-    return false;
-  }
-
-  @Override
-  protected void checkCorrectThread() {
-    // NOOP
-  }
-
   // In the case of a worker context, the IO will always be provided on an event loop thread, not a worker thread
   // so we need to execute it on the worker thread
   @Override
-  public void executeFromIO(ContextTask task) {
-    orderedTasks.execute(wrapTask(task, null, true, workerPool.metrics()), workerPool.executor());
+  <T> void execute(T value, Handler<T> task) {
+    execute(this, value ,task);
   }
 
+  private <T> void execute(ContextInternal ctx, T value, Handler<T> task) {
+    PoolMetrics metrics = workerPool.metrics();
+    Object queueMetric = metrics != null ? metrics.submitted() : null;
+    orderedTasks.execute(() -> {
+      Object execMetric = null;
+      if (metrics != null) {
+        execMetric = metrics.begin(queueMetric);
+      }
+      try {
+        ctx.dispatch(value, task);
+      } finally {
+        if (metrics != null) {
+          metrics.end(execMetric, true);
+        }
+      }
+    }, workerPool.executor());
+  }
+
+  @Override
+  public <T> void schedule(T value, Handler<T> task) {
+    PoolMetrics metrics = workerPool.metrics();
+    Object metric = metrics != null ? metrics.submitted() : null;
+    orderedTasks.execute(() -> {
+      if (metrics != null) {
+        metrics.begin(metric);
+      }
+      try {
+        task.handle(value);
+      } finally {
+        if (metrics != null) {
+          metrics.end(metric, true);
+        }
+      }
+    }, workerPool.executor());
+  }
+
+  public ContextInternal duplicate(ContextInternal in) {
+    return new Duplicated(this, in);
+  }
+
+  static class Duplicated extends ContextImpl.Duplicated<WorkerContext> {
+
+    Duplicated(WorkerContext delegate, ContextInternal other) {
+      super(delegate, other);
+    }
+
+    void executeAsync(Handler<Void> task) {
+      execute(null, task);
+    }
+
+    @Override
+    <T> void execute(T value, Handler<T> task) {
+      delegate.execute(this, value, task);
+    }
+
+    @Override
+    public boolean isEventLoopContext() {
+      return false;
+    }
+
+    @Override
+    public ContextInternal duplicate(ContextInternal context) {
+      return new Duplicated(delegate, context);
+    }
+  }
 }

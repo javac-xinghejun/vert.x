@@ -11,14 +11,12 @@
 
 package io.vertx.core.http;
 
-import io.vertx.codegen.annotations.CacheReturn;
-import io.vertx.codegen.annotations.Fluent;
-import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.Nullable;
-import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.codegen.annotations.*;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.streams.WriteStream;
 
@@ -49,9 +47,6 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
 
   @Override
   HttpServerResponse exceptionHandler(Handler<Throwable> handler);
-
-  @Override
-  HttpServerResponse write(Buffer data);
 
   @Override
   HttpServerResponse setWriteQueueMaxSize(int maxSize);
@@ -129,19 +124,22 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
   /**
    * Like {@link #putHeader(String, String)} but using CharSequence
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putHeader(CharSequence name, CharSequence value);
 
   /**
    * Like {@link #putHeader(String, String)} but providing multiple values via a String Iterable
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putHeader(String name, Iterable<String> values);
 
   /**
    * Like {@link #putHeader(String, Iterable)} but with CharSequence Iterable
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putHeader(CharSequence name, Iterable<CharSequence> values);
 
   /**
@@ -163,19 +161,22 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
   /**
    * Like {@link #putTrailer(String, String)} but using CharSequence
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putTrailer(CharSequence name, CharSequence value);
 
   /**
    * Like {@link #putTrailer(String, String)} but providing multiple values via a String Iterable
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putTrailer(String name, Iterable<String> values);
 
   /**
    * Like {@link #putTrailer(String, Iterable)} but with CharSequence Iterable
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  @Fluent
   HttpServerResponse putTrailer(CharSequence name, Iterable<CharSequence> value);
 
   /**
@@ -208,19 +209,27 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
    *
    * @param chunk  the string to write
    * @param enc  the encoding to use
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the body result
    */
-  @Fluent
-  HttpServerResponse write(String chunk, String enc);
+  Future<Void> write(String chunk, String enc);
+
+  /**
+   * Same as {@link #write(String, String)} but with an {@code handler} called when the operation completes
+   */
+  void write(String chunk, String enc, Handler<AsyncResult<Void>> handler);
 
   /**
    * Write a {@link String} to the response body, encoded in UTF-8.
    *
    * @param chunk  the string to write
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the body result
    */
-  @Fluent
-  HttpServerResponse write(String chunk);
+  Future<Void> write(String chunk);
+
+  /**
+   * Same as {@link #write(String)} but with an {@code handler} called when the operation completes
+   */
+  void write(String chunk, Handler<AsyncResult<Void>> handler);
 
   /**
    * Used to write an interim 100 Continue response to signify that the client should send the rest of the request.
@@ -234,41 +243,63 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
    * Same as {@link #end(Buffer)} but writes a String in UTF-8 encoding before ending the response.
    *
    * @param chunk  the string to write before ending the response
+   * @return a future completed with the body result
    */
-  void end(String chunk);
+  Future<Void> end(String chunk);
+
+  /**
+   * Same as {@link #end(String)} but with an {@code handler} called when the operation completes
+   */
+  void end(String chunk, Handler<AsyncResult<Void>> handler);
 
   /**
    * Same as {@link #end(Buffer)} but writes a String with the specified encoding before ending the response.
    *
    * @param chunk  the string to write before ending the response
    * @param enc  the encoding to use
+   * @return a future completed with the body result
    */
-  void end(String chunk, String enc);
+  Future<Void> end(String chunk, String enc);
+
+  /**
+   * Same as {@link #end(String, String)} but with an {@code handler} called when the operation completes
+   */
+  void end(String chunk, String enc, Handler<AsyncResult<Void>> handler);
 
   /**
    * Same as {@link #end()} but writes some data to the response body before ending. If the response is not chunked and
    * no other data has been written then the @code{Content-Length} header will be automatically set.
    *
    * @param chunk  the buffer to write before ending the response
+   * @return a future completed with the body result
    */
-  void end(Buffer chunk);
+  @Override
+  Future<Void> end(Buffer chunk);
+
+  /**
+   * Same as {@link #end(Buffer)} but with an {@code handler} called when the operation completes
+   */
+  @Override
+  void end(Buffer chunk, Handler<AsyncResult<Void>> handler);
 
   /**
    * Ends the response. If no data has been written to the response body,
    * the actual response won't get written until this method gets called.
    * <p>
    * Once the response has ended, it cannot be used any more.
+   *
+   * @return a future completed with the body result
    */
-  void end();
+  @Override
+  Future<Void> end();
 
   /**
    * Same as {@link #sendFile(String, long)} using offset @code{0} which means starting from the beginning of the file.
    *
    * @param filename  path to the file to serve
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the body result
    */
-  @Fluent
-  default HttpServerResponse sendFile(String filename) {
+  default Future<Void> sendFile(String filename) {
     return sendFile(filename, 0);
   }
 
@@ -278,10 +309,9 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
    *
    * @param filename  path to the file to serve
    * @param offset offset to start serving from
-   * @return a reference to this, so the API can be used fluently
+   * @return a future completed with the body result
    */
-  @Fluent
-  default HttpServerResponse sendFile(String filename, long offset) {
+  default Future<Void> sendFile(String filename, long offset) {
     return sendFile(filename, offset, Long.MAX_VALUE);
   }
 
@@ -294,11 +324,14 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
    *
    * @param filename  path to the file to serve
    * @param offset offset to start serving from
-   * @param length length to serve to
-   * @return a reference to this, so the API can be used fluently
+   * @param length the number of bytes to send
+   * @return a future completed with the body result
    */
-  @Fluent
-  HttpServerResponse sendFile(String filename, long offset, long length);
+  default Future<Void> sendFile(String filename, long offset, long length) {
+    Promise<Void> promise = Promise.promise();
+    sendFile(filename, offset, length, promise);
+    return promise.future();
+  }
 
   /**
    * Like {@link #sendFile(String)} but providing a handler which will be notified once the file has been completely
@@ -395,18 +428,47 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
   /**
    * Like {@link #push(HttpMethod, String, String, MultiMap, Handler)} with no headers.
    */
+  @Fluent
   HttpServerResponse push(HttpMethod method, String host, String path, Handler<AsyncResult<HttpServerResponse>> handler);
+
+  /**
+   * Same as {@link #push(HttpMethod, String, String, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default Future<HttpServerResponse> push(HttpMethod method, String host, String path) {
+    Promise<HttpServerResponse> promise = Promise.promise();
+    push(method, host, path, promise);
+    return promise.future();
+  }
 
   /**
    * Like {@link #push(HttpMethod, String, String, MultiMap, Handler)} with the host copied from the current request.
    */
+  @Fluent
   HttpServerResponse push(HttpMethod method, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler);
+
+  /**
+   * Same as {@link #push(HttpMethod, String, MultiMap, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default Future<HttpServerResponse> push(HttpMethod method, String path, MultiMap headers) {
+    Promise<HttpServerResponse> promise = Promise.promise();
+    push(method, path, headers, promise);
+    return promise.future();
+  }
 
   /**
    * Like {@link #push(HttpMethod, String, String, MultiMap, Handler)} with the host copied from the current request.
    */
   @Fluent
   HttpServerResponse push(HttpMethod method, String path, Handler<AsyncResult<HttpServerResponse>> handler);
+
+  /**
+   * Same as {@link #push(HttpMethod, String, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default Future<HttpServerResponse> push(HttpMethod method, String path) {
+    Promise<HttpServerResponse> promise = Promise.promise();
+    push(method, path, promise);
+    return promise.future();
+  }
 
   /**
    * Push a response to the client.<p/>
@@ -428,6 +490,15 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
    */
   @Fluent
   HttpServerResponse push(HttpMethod method, String host, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler);
+
+  /**
+   * Same as {@link #push(HttpMethod, String, String, MultiMap, Handler)} but with an {@code handler} called when the operation completes
+   */
+  default Future<HttpServerResponse> push(HttpMethod method, String host, String path, MultiMap headers) {
+    Promise<HttpServerResponse> promise = Promise.promise();
+    push(method, host, path, headers, promise);
+    return promise.future();
+  }
 
   /**
    * Reset this HTTP/2 stream with the error code {@code 0}.
@@ -464,5 +535,17 @@ public interface HttpServerResponse extends WriteStream<Buffer> {
   @Fluent
   default HttpServerResponse writeCustomFrame(HttpFrame frame) {
     return writeCustomFrame(frame.type(), frame.flags(), frame.payload());
+  }
+
+  /**
+   * Sets the priority of the associated stream
+   * <p/>
+   * This is not implemented for HTTP/1.x.
+   *
+   * @param streamPriority the priority for this request's stream
+   */
+  @Fluent
+  default HttpServerResponse setStreamPriority(StreamPriority streamPriority) {
+      return this;
   }
 }

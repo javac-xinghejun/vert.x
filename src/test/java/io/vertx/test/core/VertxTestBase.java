@@ -11,24 +11,18 @@
 
 package io.vertx.test.core;
 
-import io.vertx.core.AbstractVerticle;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
-import io.vertx.core.DeploymentOptions;
-import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
-import io.vertx.core.VertxOptions;
+import io.vertx.core.*;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
-import io.vertx.core.net.JksOptions;
-import io.vertx.core.net.PemKeyCertOptions;
-import io.vertx.core.net.KeyCertOptions;
-import io.vertx.core.net.PfxOptions;
-import io.vertx.core.net.TCPSSLOptions;
+import io.vertx.core.net.*;
 import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.core.spi.tracing.VertxTracer;
+import io.vertx.core.tracing.TracingOptions;
 import io.vertx.test.fakecluster.FakeClusterManager;
 import org.junit.Rule;
 
+import javax.net.ssl.SSLContext;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -65,15 +59,23 @@ public class VertxTestBase extends AsyncTestBase {
     vinit();
     VertxOptions options = getOptions();
     boolean nativeTransport = options.getPreferNativeTransport();
-    vertx = Vertx.vertx(options);
+    vertx = vertx(options);
     if (nativeTransport) {
       assertTrue(vertx.isNativeTransportEnabled());
     }
   }
 
+  protected VertxTracer getTracer() {
+    return null;
+  }
+
   protected VertxOptions getOptions() {
     VertxOptions options = new VertxOptions();
     options.setPreferNativeTransport(USE_NATIVE_TRANSPORT);
+    VertxTracer tracer = getTracer();
+    if (tracer != null) {
+      options.setTracingOptions(new TracingOptions().setEnabled(true).setFactory(opts -> tracer));
+    }
     return options;
   }
 
@@ -82,31 +84,30 @@ public class VertxTestBase extends AsyncTestBase {
       close(vertx);
     }
     if (created != null) {
-      CountDownLatch latch = new CountDownLatch(created.size());
-      for (Vertx v : created) {
-        v.close(ar -> {
-          if (ar.failed()) {
-            log.error("Failed to shutdown vert.x", ar.cause());
-          }
-          latch.countDown();
-        });
-      }
-      assertTrue(latch.await(180, TimeUnit.SECONDS));
+      closeClustered(created);
     }
     FakeClusterManager.reset(); // Bit ugly
     super.tearDown();
+  }
+
+  protected void closeClustered(List<Vertx> clustered) throws Exception {
+    CountDownLatch latch = new CountDownLatch(clustered.size());
+    for (Vertx clusteredVertx : clustered) {
+      clusteredVertx.close(ar -> {
+        if (ar.failed()) {
+          log.error("Failed to shutdown vert.x", ar.cause());
+        }
+        latch.countDown();
+      });
+    }
+    assertTrue(latch.await(180, TimeUnit.SECONDS));
   }
 
   /**
    * @return create a blank new Vert.x instance with no options closed when tear down executes.
    */
   protected Vertx vertx() {
-    if (created == null) {
-      created = new ArrayList<>();
-    }
-    Vertx vertx = Vertx.vertx();
-    created.add(vertx);
-    return vertx;
+    return vertx(new VertxOptions());
   }
 
   /**
@@ -145,12 +146,22 @@ public class VertxTestBase extends AsyncTestBase {
   }
 
   protected void startNodes(int numNodes, VertxOptions options) {
+    VertxOptions[] array = new VertxOptions[numNodes];
+    for (int i = 0;i < numNodes;i++) {
+      array[i] = options;
+    }
+    startNodes(array);
+  }
+
+  protected void startNodes(VertxOptions... options) {
+    int numNodes = options.length;
     CountDownLatch latch = new CountDownLatch(numNodes);
     vertices = new Vertx[numNodes];
     for (int i = 0; i < numNodes; i++) {
       int index = i;
-      clusteredVertx(options.setClusterHost("localhost").setClusterPort(0).setClustered(true)
-        .setClusterManager(getClusterManager()), ar -> {
+      options[i].setClusterManager(getClusterManager())
+        .getEventBusOptions().setHost("localhost").setPort(0).setClustered(true);
+      clusteredVertx(options[i], ar -> {
           try {
             if (ar.failed()) {
               ar.cause().printStackTrace();
@@ -181,80 +192,17 @@ public class VertxTestBase extends AsyncTestBase {
     }
   }
 
-  protected static final String[] ENABLED_CIPHER_SUITES =
-    new String[] {
-      "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
-      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
-      "TLS_RSA_WITH_AES_128_CBC_SHA256",
-      "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256",
-      "TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256",
-      "TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",
-      "TLS_DHE_DSS_WITH_AES_128_CBC_SHA256",
-      "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
-      "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
-      "TLS_RSA_WITH_AES_128_CBC_SHA",
-      "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA",
-      "TLS_ECDH_RSA_WITH_AES_128_CBC_SHA",
-      "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
-      "TLS_DHE_DSS_WITH_AES_128_CBC_SHA",
-      "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA",
-      "TLS_ECDHE_RSA_WITH_RC4_128_SHA",
-      "SSL_RSA_WITH_RC4_128_SHA",
-      "TLS_ECDH_ECDSA_WITH_RC4_128_SHA",
-      "TLS_ECDH_RSA_WITH_RC4_128_SHA",
-      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-      "TLS_RSA_WITH_AES_128_GCM_SHA256",
-      "TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256",
-      "TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256",
-      "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
-      "TLS_DHE_DSS_WITH_AES_128_GCM_SHA256",
-      "TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA",
-      "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
-      "SSL_RSA_WITH_3DES_EDE_CBC_SHA",
-      "TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA",
-      "TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA",
-      "SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA",
-      "SSL_DHE_DSS_WITH_3DES_EDE_CBC_SHA",
-      "SSL_RSA_WITH_RC4_128_MD5",
-      "TLS_EMPTY_RENEGOTIATION_INFO_SCSV",
-      "TLS_DH_anon_WITH_AES_128_GCM_SHA256",
-      "TLS_DH_anon_WITH_AES_128_CBC_SHA256",
-      "TLS_ECDH_anon_WITH_AES_128_CBC_SHA",
-      "TLS_DH_anon_WITH_AES_128_CBC_SHA",
-      "TLS_ECDH_anon_WITH_RC4_128_SHA",
-      "SSL_DH_anon_WITH_RC4_128_MD5",
-      "TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA",
-      "SSL_DH_anon_WITH_3DES_EDE_CBC_SHA",
-      "TLS_RSA_WITH_NULL_SHA256",
-      "TLS_ECDHE_ECDSA_WITH_NULL_SHA",
-      "TLS_ECDHE_RSA_WITH_NULL_SHA",
-      "SSL_RSA_WITH_NULL_SHA",
-      "TLS_ECDH_ECDSA_WITH_NULL_SHA",
-      "TLS_ECDH_RSA_WITH_NULL_SHA",
-      "TLS_ECDH_anon_WITH_NULL_SHA",
-      "SSL_RSA_WITH_NULL_MD5",
-      "SSL_RSA_WITH_DES_CBC_SHA",
-      "SSL_DHE_RSA_WITH_DES_CBC_SHA",
-      "SSL_DHE_DSS_WITH_DES_CBC_SHA",
-      "SSL_DH_anon_WITH_DES_CBC_SHA",
-      "SSL_RSA_EXPORT_WITH_RC4_40_MD5",
-      "SSL_DH_anon_EXPORT_WITH_RC4_40_MD5",
-      "SSL_RSA_EXPORT_WITH_DES40_CBC_SHA",
-      "SSL_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA",
-      "SSL_DHE_DSS_EXPORT_WITH_DES40_CBC_SHA",
-      "SSL_DH_anon_EXPORT_WITH_DES40_CBC_SHA",
-      "TLS_KRB5_WITH_RC4_128_SHA",
-      "TLS_KRB5_WITH_RC4_128_MD5",
-      "TLS_KRB5_WITH_3DES_EDE_CBC_SHA",
-      "TLS_KRB5_WITH_3DES_EDE_CBC_MD5",
-      "TLS_KRB5_WITH_DES_CBC_SHA",
-      "TLS_KRB5_WITH_DES_CBC_MD5",
-      "TLS_KRB5_EXPORT_WITH_RC4_40_SHA",
-      "TLS_KRB5_EXPORT_WITH_RC4_40_MD5",
-      "TLS_KRB5_EXPORT_WITH_DES_CBC_40_SHA",
-      "TLS_KRB5_EXPORT_WITH_DES_CBC_40_MD5"
-    };
+  protected static final String[] ENABLED_CIPHER_SUITES;
+
+  static {
+    String[] suites = new String[0];
+    try {
+      suites = SSLContext.getDefault().getSocketFactory().getSupportedCipherSuites();
+    } catch (NoSuchAlgorithmException e) {
+      e.printStackTrace();
+    }
+    ENABLED_CIPHER_SUITES = suites;
+  }
 
   /**
    * Create a worker verticle for the current Vert.x and return its context.
@@ -290,5 +238,19 @@ public class VertxTestBase extends AsyncTestBase {
       contexts.add(createWorker());
     }
     return contexts;
+  }
+
+  protected void assertOnIOContext(Context context) {
+    Context current = Vertx.currentContext();
+    assertNotNull(current);
+    assertSameEventLoop(context, current);
+    for (StackTraceElement elt : Thread.currentThread().getStackTrace()) {
+      String className = elt.getClassName();
+      String methodName = elt.getMethodName();
+      if (className.equals("io.vertx.core.impl.AbstractContext") && methodName.equals("dispatch")) {
+        return;
+      }
+    }
+    fail("Not dispatching");
   }
 }

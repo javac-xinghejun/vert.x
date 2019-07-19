@@ -20,16 +20,13 @@ import io.vertx.core.impl.launcher.commands.BareCommand;
 import io.vertx.core.impl.launcher.commands.CommandTestBase;
 import io.vertx.core.impl.launcher.commands.HttpTestVerticle;
 import io.vertx.core.impl.launcher.commands.RunCommandTest;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.json.JsonObject;
-import io.vertx.core.logging.LoggerFactory;
-import io.vertx.core.spi.launcher.CommandFactory;
 import io.vertx.core.spi.launcher.DefaultCommand;
-import io.vertx.core.spi.launcher.DefaultCommandFactory;
 import org.junit.After;
 import org.junit.Test;
 
 import java.io.IOException;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -66,7 +63,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
     };
 
     myLauncher.dispatch(new String[0]);
-    waitUntil(() -> {
+    assertWaitUntil(() -> {
       try {
         return RunCommandTest.getHttpCode() == 200;
       } catch (IOException e) {
@@ -88,7 +85,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
 
     myLauncher.dispatch(new String[]{"foo"});
     assertThat(myLauncher.getCommandNames()).contains("foo");
-    waitUntil(spy::get);
+    assertWaitUntil(spy::get);
   }
 
   @Test
@@ -128,7 +125,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
 
       @Override
       public void beforeStartingVertx(VertxOptions options) {
-        options.setClustered(true);
+        options.getEventBusOptions().setClustered(true);
       }
 
       @Override
@@ -143,7 +140,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
     };
 
     myLauncher.dispatch(new String[0]);
-    waitUntil(() -> {
+    assertWaitUntil(() -> {
       try {
         return RunCommandTest.getHttpCode() == 200;
       } catch (IOException e) {
@@ -181,7 +178,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
     };
 
     myLauncher.dispatch(new String[0]);
-    waitUntil(() -> {
+    assertWaitUntil(() -> {
       try {
         return RunCommandTest.getHttpCode() == 200;
       } catch (IOException e) {
@@ -213,7 +210,7 @@ public class LauncherExtensibilityTest extends CommandTestBase {
     };
 
     myLauncher.dispatch(new String[] {"-conf=\"{\"time\":345667}"});
-    waitUntil(() -> {
+    assertWaitUntil(() -> {
       try {
         return RunCommandTest.getHttpCode() == 200;
       } catch (IOException e) {

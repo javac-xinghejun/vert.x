@@ -15,7 +15,9 @@ import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.metrics.Measured;
 
 /**
@@ -46,18 +48,6 @@ public interface EventBus extends Measured {
   EventBus send(String address, Object message);
 
   /**
-   * Like {@link #send(String, Object)} but specifying a {@code replyHandler} that will be called if the recipient
-   * subsequently replies to the message.
-   *
-   * @param address  the address to send it to
-   * @param message  the message, may be {@code null}
-   * @param replyHandler  reply handler will be called when any reply from the recipient is received, may be {@code null}
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  <T> EventBus send(String address, Object message, Handler<AsyncResult<Message<T>>> replyHandler);
-
-  /**
    * Like {@link #send(String, Object)} but specifying {@code options} that can be used to configure the delivery.
    *
    * @param address  the address to send it to
@@ -69,17 +59,48 @@ public interface EventBus extends Measured {
   EventBus send(String address, Object message, DeliveryOptions options);
 
   /**
-   * Like {@link #send(String, Object, DeliveryOptions)} but specifying a {@code replyHandler} that will be called if the recipient
+   * Sends a message and and specify a {@code replyHandler} that will be called if the recipient
    * subsequently replies to the message.
+   * <p>
+   * The message will be delivered to at most one of the handlers registered to the address.
    *
    * @param address  the address to send it to
-   * @param message  the message, may be {@code null}
-   * @param options  delivery options
-   * @param replyHandler  reply handler will be called when any reply from the recipient is received, may be {@code null}
+   * @param message  the message body, may be {@code null}
+   * @param replyHandler  reply handler will be called when any reply from the recipient is received
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  <T> EventBus send(String address, Object message, DeliveryOptions options, Handler<AsyncResult<Message<T>>> replyHandler);
+  <T> EventBus request(String address, Object message, Handler<AsyncResult<Message<T>>> replyHandler);
+
+  /**
+   * Like {@link #request(String, Object, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default <T> Future<Message<T>> request(String address, Object message) {
+    Promise<Message<T>> promise = Promise.promise();
+    request(address, message, promise);
+    return promise.future();
+  }
+
+  /**
+   * Like {@link #request(String, Object, Handler)} but specifying {@code options} that can be used to configure the delivery.
+   *
+   * @param address  the address to send it to
+   * @param message  the message body, may be {@code null}
+   * @param options  delivery options
+   * @param replyHandler  reply handler will be called when any reply from the recipient is received
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  <T> EventBus request(String address, Object message, DeliveryOptions options, Handler<AsyncResult<Message<T>>> replyHandler);
+
+  /**
+   * Like {@link #request(String, Object, DeliveryOptions, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  default <T> Future<Message<T>> request(String address, Object message, DeliveryOptions options) {
+    Promise<Message<T>> promise = Promise.promise();
+    request(address, message, options, promise);
+    return promise.future();
+  }
 
   /**
    * Publish a message.<p>
@@ -198,7 +219,7 @@ public interface EventBus extends Measured {
    * @param codec  the message codec to register
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   EventBus registerCodec(MessageCodec codec);
 
   /**
@@ -207,7 +228,7 @@ public interface EventBus extends Measured {
    * @param name  the name of the codec
    * @return a reference to this, so the API can be used fluently
    */
-  @GenIgnore
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
   EventBus unregisterCodec(String name);
 
   /**
@@ -257,15 +278,34 @@ public interface EventBus extends Measured {
    * @param interceptor  the interceptor
    * @return a reference to this, so the API can be used fluently
    */
-  EventBus addInterceptor(Handler<SendContext> interceptor);
+  @Fluent
+  <T> EventBus addOutboundInterceptor(Handler<DeliveryContext<T>> interceptor);
 
   /**
-   * Remove an interceptor
+   * Remove an interceptor that was added by {@link #addOutboundInterceptor(Handler)}
    *
    * @param interceptor  the interceptor
    * @return a reference to this, so the API can be used fluently
    */
-  EventBus removeInterceptor(Handler<SendContext> interceptor);
+  @Fluent
+  <T> EventBus removeOutboundInterceptor(Handler<DeliveryContext<T>> interceptor);
 
+  /**
+   * Add an interceptor that will be called whenever a message is received by Vert.x
+   *
+   * @param interceptor  the interceptor
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  <T> EventBus addInboundInterceptor(Handler<DeliveryContext<T>> interceptor);
+
+  /**
+   * Remove an interceptor that was added by {@link #addInboundInterceptor(Handler)}
+   *
+   * @param interceptor  the interceptor
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  <T> EventBus removeInboundInterceptor(Handler<DeliveryContext<T>> interceptor);
 }
 

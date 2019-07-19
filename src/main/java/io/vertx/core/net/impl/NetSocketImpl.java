@@ -14,28 +14,28 @@ package io.vertx.core.net.impl;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandler;
-import io.netty.channel.ChannelPromise;
+import io.netty.handler.ssl.SniHandler;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.util.CharsetUtil;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
-import io.vertx.core.impl.ContextImpl;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.NetSocketInternal;
 import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.spi.metrics.TCPMetrics;
+import io.vertx.core.streams.impl.InboundBuffer;
 
 import java.io.File;
 import java.io.IOException;
@@ -65,35 +65,49 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   private static final Logger log = LoggerFactory.getLogger(NetSocketImpl.class);
 
   private final String writeHandlerID;
-  private final MessageConsumer registration;
   private final SSLHelper helper;
   private final SocketAddress remoteAddress;
   private final TCPMetrics metrics;
-  private Handler<Object> messageHandler = NULL_MSG_HANDLER;
+  private final InboundBuffer<Object> pending;
   private Handler<Void> endHandler;
   private Handler<Void> drainHandler;
-  private Buffer pendingData;
-  private boolean paused = false;
+  private MessageConsumer registration;
+  private Handler<Object> messageHandler;
+  private boolean closed;
 
-  public NetSocketImpl(VertxInternal vertx, ChannelHandlerContext channel, ContextImpl context,
+  public NetSocketImpl(VertxInternal vertx, ChannelHandlerContext channel, ContextInternal context,
                        SSLHelper helper, TCPMetrics metrics) {
     this(vertx, channel, null, context, helper, metrics);
   }
 
-  public NetSocketImpl(VertxInternal vertx, ChannelHandlerContext channel, SocketAddress remoteAddress, ContextImpl context,
+  public NetSocketImpl(VertxInternal vertx, ChannelHandlerContext channel, SocketAddress remoteAddress, ContextInternal context,
                        SSLHelper helper, TCPMetrics metrics) {
     super(vertx, channel, context);
     this.helper = helper;
-    this.writeHandlerID = UUID.randomUUID().toString();
+    this.writeHandlerID = "__vertx.net." + UUID.randomUUID().toString();
     this.remoteAddress = remoteAddress;
     this.metrics = metrics;
-    Handler<Message<Buffer>> writeHandler = msg -> write(msg.body());
-    registration = vertx.eventBus().<Buffer>localConsumer(writeHandlerID).handler(writeHandler);
+    this.messageHandler = NULL_MSG_HANDLER;
+    pending = new InboundBuffer<>(context);
+    pending.drainHandler(v -> doResume());
+    pending.handler(obj -> {
+      if (obj == InboundBuffer.END_SENTINEL) {
+        Handler<Void> handler = endHandler();
+        if (handler != null) {
+          handler.handle(null);
+        }
+      } else {
+        Handler<Object> handler = messageHandler();
+        if (handler != null) {
+          handler.handle(obj);
+        }
+      }
+    });
   }
 
-  @Override
-  public ChannelHandlerContext channelHandlerContext() {
-    return chctx;
+  synchronized void registerEventBusHandler() {
+    Handler<Message<Buffer>> writeHandler = msg -> write(msg.body());
+    registration = vertx.eventBus().<Buffer>localConsumer(writeHandlerID).handler(writeHandler);
   }
 
   @Override
@@ -107,49 +121,60 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   }
 
   @Override
-  public NetSocketInternal writeMessage(Object message) {
-    super.writeToChannel(message);
+  public synchronized NetSocketInternal writeMessage(Object message) {
+    if (closed) {
+      throw new IllegalStateException("Socket is closed");
+    }
+    writeToChannel(message);
     return this;
   }
 
   @Override
   public NetSocketInternal writeMessage(Object message, Handler<AsyncResult<Void>> handler) {
-    ChannelPromise promise = chctx.newPromise();
-    super.writeToChannel(message, promise);
-    promise.addListener(new ChannelFutureListener() {
-      @Override
-      public void operationComplete(ChannelFuture future) throws Exception {
-        if (future.isSuccess()) {
-          handler.handle(Future.succeededFuture());
-        } else {
-          handler.handle(Future.failedFuture(future.cause()));
-        }
-      }
-    });
+    writeToChannel(message, toPromise(handler));
     return this;
   }
 
   @Override
-  public NetSocket write(Buffer data) {
-    ByteBuf buf = data.getByteBuf();
-    write(buf);
-    return this;
+  public Future<Void> write(Buffer data) {
+    Promise<Void> promise = Promise.promise();
+    write(data, promise);
+    return promise.future();
   }
 
   @Override
-  public NetSocket write(String str) {
-    write(Unpooled.copiedBuffer(str, CharsetUtil.UTF_8));
-    return this;
+  public void write(String str, Handler<AsyncResult<Void>> handler) {
+    write(Unpooled.copiedBuffer(str, CharsetUtil.UTF_8), handler);
   }
 
   @Override
-  public NetSocket write(String str, String enc) {
-    if (enc == null) {
-      write(str);
-    } else {
-      write(Unpooled.copiedBuffer(str, Charset.forName(enc)));
-    }
-    return this;
+  public Future<Void> write(String str) {
+    Promise<Void> promise = Promise.promise();
+    write(Unpooled.copiedBuffer(str, CharsetUtil.UTF_8), promise);
+    return promise.future();
+  }
+
+  @Override
+  public Future<Void> write(String str, String enc) {
+    Promise<Void> promise = Promise.promise();
+    write(Unpooled.copiedBuffer(str, Charset.forName(enc)), promise);
+    return promise.future();
+  }
+
+  @Override
+  public void write(String str, String enc, Handler<AsyncResult<Void>> handler) {
+    Charset cs = enc != null ? Charset.forName(enc) : CharsetUtil.UTF_8;
+    write(Unpooled.copiedBuffer(str, cs), handler);
+  }
+
+  @Override
+  public void write(Buffer message, Handler<AsyncResult<Void>> handler) {
+    write(message.getByteBuf(), handler);
+  }
+
+  private void write(ByteBuf buff, Handler<AsyncResult<Void>> handler) {
+    reportBytesWritten(buff.readableBytes());
+    writeMessage(buff, handler);
   }
 
   @Override
@@ -162,36 +187,31 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
     return this;
   }
 
+  private synchronized Handler<Object> messageHandler() {
+    return messageHandler;
+  }
+
   @Override
   public synchronized NetSocketInternal messageHandler(Handler<Object> handler) {
-    if (handler != null) {
-      messageHandler = handler;
-    } else {
-      messageHandler = NULL_MSG_HANDLER;
-    }
+    messageHandler = handler;
     return this;
   }
 
   @Override
   public synchronized NetSocket pause() {
-    if (!paused) {
-      paused = true;
-      doPause();
-    }
+    pending.pause();
+    return this;
+  }
+
+  @Override
+  public NetSocket fetch(long amount) {
+    pending.fetch(amount);
     return this;
   }
 
   @Override
   public synchronized NetSocket resume() {
-    if (paused) {
-      paused = false;
-      if (pendingData != null) {
-        // Send empty buffer to trigger sending of pending data
-        context.runOnContext(v -> handleMessageReceived(Unpooled.EMPTY_BUFFER));
-      }
-      doResume();
-    }
-    return this;
+    return fetch(Long.MAX_VALUE);
   }
 
   @Override
@@ -205,6 +225,10 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
     return isNotWritable();
   }
 
+  private synchronized Handler<Void> endHandler() {
+    return endHandler;
+  }
+
   @Override
   public synchronized NetSocket endHandler(Handler<Void> endHandler) {
     this.endHandler = endHandler;
@@ -216,11 +240,6 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
     this.drainHandler = drainHandler;
     vertx.runOnContext(v -> callDrainHandler()); //If the channel is already drained, we want to call it immediately
     return this;
-  }
-
-  @Override
-  public NetSocket sendFile(String filename, long offset, long length) {
-    return sendFile(filename, offset, length, null);
   }
 
   @Override
@@ -260,16 +279,6 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
     return this;
   }
 
-  @Override
-  public SocketAddress remoteAddress() {
-    return super.remoteAddress();
-  }
-
-  public SocketAddress localAddress() {
-    return super.localAddress();
-  }
-
-  @Override
   public NetSocketImpl exceptionHandler(Handler<Throwable> handler) {
     return (NetSocketImpl) super.exceptionHandler(handler);
   }
@@ -280,86 +289,84 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   }
 
   @Override
-  public synchronized void close() {
-    // Close after all data is written
-    chctx.write(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
-    chctx.flush();
-  }
-
-  @Override
-  public NetSocket upgradeToSsl(Handler<Void> handler) {
+  public NetSocket upgradeToSsl(Handler<AsyncResult<Void>> handler) {
     return upgradeToSsl(null, handler);
   }
 
   @Override
-  public NetSocket upgradeToSsl(String serverName, Handler<Void> handler) {
+  public NetSocket upgradeToSsl(String serverName, Handler<AsyncResult<Void>> handler) {
     ChannelOutboundHandler sslHandler = (ChannelOutboundHandler) chctx.pipeline().get("ssl");
     if (sslHandler == null) {
+      chctx.pipeline().addFirst("handshaker", new SslHandshakeCompletionHandler(ar -> {
+        if (handler != null) {
+          handler.handle(ar.mapEmpty());
+        }
+      }));
       if (remoteAddress != null) {
         sslHandler = new SslHandler(helper.createEngine(vertx, remoteAddress, serverName));
+        ((SslHandler) sslHandler).setHandshakeTimeout(helper.getSslHandshakeTimeout(), helper.getSslHandshakeTimeoutUnit());
       } else {
         if (helper.isSNI()) {
-          sslHandler = new VertxSniHandler(helper, vertx);
+          sslHandler = new SniHandler(helper.serverNameMapper(vertx));
         } else {
           sslHandler = new SslHandler(helper.createEngine(vertx));
+          ((SslHandler) sslHandler).setHandshakeTimeout(helper.getSslHandshakeTimeout(), helper.getSslHandshakeTimeoutUnit());
         }
       }
       chctx.pipeline().addFirst("ssl", sslHandler);
     }
-    io.netty.util.concurrent.Future<Channel> handshakeFuture;
-    if (sslHandler instanceof SslHandler) {
-      handshakeFuture = ((SslHandler) sslHandler).handshakeFuture();
-    } else {
-      handshakeFuture = ((VertxSniHandler) sslHandler).handshakeFuture();
-    }
-    handshakeFuture.addListener(future -> context.executeFromIO(() -> {
-      if (future.isSuccess()) {
-        handler.handle(null);
-      } else {
-        log.error(future.cause());
-      }
-    }));
     return this;
   }
 
   @Override
-  protected synchronized void handleInterestedOpsChanged() {
-    checkContext();
-    callDrainHandler();
+  protected void handleInterestedOpsChanged() {
+    context.dispatch(v -> callDrainHandler());
   }
 
   @Override
-  public void end() {
-    close();
+  public void end(Handler<AsyncResult<Void>> handler) {
+    close(handler);
   }
 
   @Override
-  protected synchronized void handleClosed() {
-    checkContext();
-    if (endHandler != null) {
-      endHandler.handle(null);
+  public Future<Void> end() {
+    return close();
+  }
+
+  @Override
+  protected void handleClosed() {
+    MessageConsumer consumer;
+    synchronized (this) {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      consumer = registration;
+      registration = null;
     }
+    pending.write(InboundBuffer.END_SENTINEL);
     super.handleClosed();
-    if (vertx.eventBus() != null) {
-      registration.unregister();
+    if (consumer != null) {
+      consumer.unregister();
     }
   }
 
-  public synchronized void handleMessageReceived(Object msg) {
-    checkContext();
-    if (messageHandler != null) {
-      messageHandler.handle(msg);
-    }
+  public void handleMessage(Object msg) {
+    context.dispatch(msg, o -> {
+      if (!pending.write(msg)) {
+        doPause();
+      }
+    });
   }
 
   private class DataMessageHandler implements Handler<Object> {
 
-    private final ByteBufAllocator allocator;
     private final Handler<Buffer> dataHandler;
+    private final ByteBufAllocator allocator;
 
-    public DataMessageHandler(ByteBufAllocator allocator, Handler<Buffer> dataHandler) {
-      this.dataHandler = dataHandler;
+    DataMessageHandler(ByteBufAllocator allocator, Handler<Buffer> dataHandler) {
       this.allocator = allocator;
+      this.dataHandler = dataHandler;
     }
 
     @Override
@@ -369,26 +376,9 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
         byteBuf = VertxHandler.safeBuffer(byteBuf, allocator);
         Buffer data = Buffer.buffer(byteBuf);
         reportBytesRead(data.length());
-        if (paused) {
-          if (pendingData == null) {
-            pendingData = data.copy();
-          } else {
-            pendingData.appendBuffer(data);
-          }
-          return;
-        }
-        if (pendingData != null) {
-          data = pendingData.appendBuffer(data);
-          pendingData = null;
-        }
         dataHandler.handle(data);
       }
     }
-  }
-
-  private void write(ByteBuf buff) {
-    reportBytesWritten(buff.readableBytes());
-    super.writeToChannel(buff);
   }
 
   private synchronized void callDrainHandler() {

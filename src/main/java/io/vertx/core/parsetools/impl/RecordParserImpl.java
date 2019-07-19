@@ -11,6 +11,7 @@
 
 package io.vertx.core.parsetools.impl;
 
+import io.netty.buffer.Unpooled;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.impl.Arguments;
@@ -25,29 +26,32 @@ import java.util.Objects;
  */
 public class RecordParserImpl implements RecordParser {
 
-  private Buffer buff;
+  // Empty and unmodifiable
+  private static final Buffer EMPTY_BUFFER = Buffer.buffer(Unpooled.EMPTY_BUFFER);
+
+  private Buffer buff = EMPTY_BUFFER;
   private int pos;            // Current position in buffer
   private int start;          // Position of beginning of current record
   private int delimPos;       // Position of current match in delimiter array
-  private boolean reset;      // Allows user to toggle mode / change delim when records are emitted
 
   private boolean delimited;
   private byte[] delim;
   private int recordSize;
-  private Handler<Buffer> output;
+  private int maxRecordSize;
+  private long demand = Long.MAX_VALUE;
+  private Handler<Buffer> eventHandler;
   private Handler<Void> endHandler;
   private Handler<Throwable> exceptionHandler;
 
   private final ReadStream<Buffer> stream;
 
-  private RecordParserImpl(ReadStream<Buffer> stream, Handler<Buffer> output) {
+  private RecordParserImpl(ReadStream<Buffer> stream) {
     this.stream = stream;
-    this.output = output;
   }
 
   public void setOutput(Handler<Buffer> output) {
     Objects.requireNonNull(output, "output");
-    this.output = output;
+    eventHandler = output;
   }
 
   /**
@@ -89,7 +93,8 @@ public class RecordParserImpl implements RecordParser {
    * @param output  handler that will receive the output
    */
   public static RecordParser newDelimited(Buffer delim, ReadStream<Buffer> stream, Handler<Buffer> output) {
-    RecordParserImpl ls = new RecordParserImpl(stream, output);
+    RecordParserImpl ls = new RecordParserImpl(stream);
+    ls.handler(output);
     ls.delimitedMode(delim);
     return ls;
   }
@@ -105,7 +110,8 @@ public class RecordParserImpl implements RecordParser {
    */
   public static RecordParser newFixed(int size, ReadStream<Buffer> stream, Handler<Buffer> output) {
     Arguments.require(size > 0, "Size must be > 0");
-    RecordParserImpl ls = new RecordParserImpl(stream, output);
+    RecordParserImpl ls = new RecordParserImpl(stream);
+    ls.handler(output);
     ls.fixedSizeMode(size);
     return ls;
   }
@@ -135,7 +141,6 @@ public class RecordParserImpl implements RecordParser {
     delimited = true;
     this.delim = delim.getBytes();
     delimPos = 0;
-    reset = true;
   }
 
   /**
@@ -149,41 +154,76 @@ public class RecordParserImpl implements RecordParser {
     Arguments.require(size > 0, "Size must be > 0");
     delimited = false;
     recordSize = size;
-    reset = true;
+  }
+
+  /**
+   * Set the maximum allowed size for a record when using the delimited mode.
+   * The delimiter itself does not count for the record size.
+   * <p>
+   * If a record is longer than specified, an {@link IllegalStateException} will be thrown.
+   *
+   * @param size the maximum record size
+   * @return  a reference to this, so the API can be used fluently
+   */
+  public RecordParser maxRecordSize(int size) {
+    Arguments.require(size > 0, "Size must be > 0");
+    maxRecordSize = size;
+    return this;
   }
 
   private void handleParsing() {
-    int len = buff.length();
     do {
-      reset = false;
-      if (delimited) {
-        parseDelimited();
+      if (demand > 0L) {
+        int next;
+        if (delimited) {
+          next = parseDelimited();
+        } else {
+          next = parseFixed();
+        }
+        if (next == -1) {
+          ReadStream<Buffer> s = stream;
+          if (s != null) {
+            s.resume();
+          }
+          break;
+        }
+        if (demand != Long.MAX_VALUE) {
+          demand--;
+        }
+        Buffer event = buff.getBuffer(start, next);
+        start = pos;
+        Handler<Buffer> handler = eventHandler;
+        if (handler != null) {
+          handler.handle(event);
+        }
       } else {
-        parseFixed();
+        // Should use a threshold ?
+        ReadStream<Buffer> s = stream;
+        if (s != null) {
+          s.pause();
+        }
+        break;
       }
-    } while (reset);
-
+    } while (true);
+    int len = buff.length();
     if (start == len) {
-      //Nothing left
-      buff = null;
-      pos = 0;
+      buff = EMPTY_BUFFER;
     } else {
       buff = buff.getBuffer(start, len);
-      pos = buff.length();
     }
+    pos -= start;
     start = 0;
   }
 
-  private void parseDelimited() {
+  private int parseDelimited() {
     int len = buff.length();
-    for (; pos < len && !reset; pos++) {
+    for (; pos < len; pos++) {
       if (buff.getByte(pos) == delim[delimPos]) {
         delimPos++;
         if (delimPos == delim.length) {
-          Buffer ret = buff.getBuffer(start, pos - delim.length + 1);
-          start = pos + 1;
+          pos++;
           delimPos = 0;
-          output.handle(ret);
+          return pos - delim.length;
         }
       } else {
         if (delimPos > 0) {
@@ -192,17 +232,17 @@ public class RecordParserImpl implements RecordParser {
         }
       }
     }
+    return -1;
   }
 
-  private void parseFixed() {
+  private int parseFixed() {
     int len = buff.length();
-    while (len - start >= recordSize && !reset) {
+    if (len - start >= recordSize) {
       int end = start + recordSize;
-      Buffer ret = buff.getBuffer(start, end);
-      start = end;
-      pos = start - 1;
-      output.handle(ret);
+      pos = end;
+      return end;
     }
+    return -1;
   }
 
   /**
@@ -211,12 +251,20 @@ public class RecordParserImpl implements RecordParser {
    * @param buffer  a chunk of data
    */
   public void handle(Buffer buffer) {
-    if (buff == null) {
+    if (buff.length() == 0) {
       buff = buffer;
     } else {
       buff.appendBuffer(buffer);
     }
     handleParsing();
+    if (buff != null && maxRecordSize > 0 && buff.length() > maxRecordSize) {
+      IllegalStateException ex = new IllegalStateException("The current record is too long");
+      if (exceptionHandler != null) {
+        exceptionHandler.handle(ex);
+      } else {
+        throw ex;
+      }
+    }
   }
 
   private void end() {
@@ -234,7 +282,7 @@ public class RecordParserImpl implements RecordParser {
 
   @Override
   public RecordParser handler(Handler<Buffer> handler) {
-    output = handler;
+    eventHandler = handler;
     if (stream != null) {
       if (handler != null) {
         stream.endHandler(v -> end());
@@ -255,18 +303,24 @@ public class RecordParserImpl implements RecordParser {
 
   @Override
   public RecordParser pause() {
-    if (stream != null) {
-      stream.pause();
+    demand = 0L;
+    return this;
+  }
+
+  @Override
+  public RecordParser fetch(long amount) {
+    Arguments.require(amount > 0, "Fetch amount must be > 0");
+    demand += amount;
+    if (demand < 0L) {
+      demand = Long.MAX_VALUE;
     }
+    handleParsing();
     return this;
   }
 
   @Override
   public RecordParser resume() {
-    if (stream != null) {
-      stream.resume();
-    }
-    return this;
+    return fetch(Long.MAX_VALUE);
   }
 
   @Override
