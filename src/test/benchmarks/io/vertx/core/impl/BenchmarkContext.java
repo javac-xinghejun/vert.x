@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -13,8 +13,6 @@ package io.vertx.core.impl;
 
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
-
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -31,18 +29,34 @@ public class BenchmarkContext extends ContextImpl {
   }
 
   @Override
-  void executeAsync(Handler<Void> task) {
-    execute(null, task);
+  <T> void execute(T argument, Handler<T> task) {
+    emitFromIO(argument, task);
   }
 
   @Override
-  protected <T> void execute(T value, Handler<T> task) {
-    dispatch(value, task);
+  public void execute(Runnable task) {
+    if (THREAD_CHECKS) {
+      checkEventLoopThread();
+    }
+    dispatch(task);
+  }
+
+  @Override
+  public <T> void emitFromIO(T event, Handler<T> handler) {
+    if (THREAD_CHECKS) {
+      checkEventLoopThread();
+    }
+    dispatch(event, handler);
   }
 
   @Override
   public <T> void schedule(T value, Handler<T> task) {
     task.handle(value);
+  }
+
+  @Override
+  public <T> void emit(T event, Handler<T> handler) {
+    throw new UnsupportedOperationException();
   }
 
   @Override

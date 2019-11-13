@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -11,6 +11,7 @@
 
 package io.vertx.core.impl;
 
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.*;
 import io.vertx.core.spi.metrics.Metrics;
 import io.vertx.core.spi.metrics.MetricsProvider;
@@ -21,11 +22,11 @@ import io.vertx.core.spi.metrics.PoolMetrics;
  */
 class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
 
-  private final Context ctx;
+  private final ContextInternal ctx;
   private final VertxImpl.SharedWorkerPool pool;
   private boolean closed;
 
-  public WorkerExecutorImpl(Context ctx, VertxImpl.SharedWorkerPool pool) {
+  public WorkerExecutorImpl(ContextInternal ctx, VertxImpl.SharedWorkerPool pool) {
     this.ctx = ctx;
     this.pool = pool;
   }
@@ -51,32 +52,39 @@ class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
     return pool;
   }
 
-  public synchronized <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> asyncResultHandler) {
+  @Override
+  public <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
     if (closed) {
       throw new IllegalStateException("Worker executor closed");
     }
     ContextInternal context = (ContextInternal) ctx.owner().getOrCreateContext();
     ContextImpl impl = context instanceof ContextImpl.Duplicated ? ((ContextImpl.Duplicated)context).delegate : (ContextImpl) context;
-    ContextImpl.executeBlocking(context, blockingCodeHandler, asyncResultHandler, pool, ordered ? impl.orderedTasks : null);
+    return ContextImpl.executeBlocking(context, blockingCodeHandler, pool, ordered ? impl.orderedTasks : null);
+  }
+
+  public synchronized <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> asyncResultHandler) {
+    Future<T> fut = executeBlocking(blockingCodeHandler, ordered);
+    if (asyncResultHandler != null) {
+      fut.setHandler(asyncResultHandler);
+    }
   }
 
   @Override
-  public void close() {
+  public Future<Void> close() {
+    PromiseInternal<Void> promise = ctx.promise();
+    close(promise);
+    return promise.future();
+  }
+
+  @Override
+  public void close(Promise<Void> completion) {
     synchronized (this) {
       if (!closed) {
         closed = true;
-      } else {
-        return;
+        ctx.removeCloseHook(this);
+        pool.release();
       }
     }
-    ctx.removeCloseHook(this);
-    pool.release();
+    completion.complete();
   }
-
-  @Override
-  public void close(Handler<AsyncResult<Void>> completionHandler) {
-    close();
-    completionHandler.handle(Future.succeededFuture());
-  }
-
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -89,7 +89,7 @@ public class HttpHandlers implements Handler<HttpServerConnection> {
     if (!extensionHandshakers.isEmpty()) {
       WebSocketServerExtensionHandler extensionHandler = new WebSocketServerExtensionHandler(
         extensionHandshakers.toArray(new WebSocketServerExtensionHandshaker[extensionHandshakers.size()]));
-      pipeline.addLast("websocketExtensionHandler", extensionHandler);
+      pipeline.addBefore("handler", "websocketExtensionHandler", extensionHandler);
     }
   }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -12,10 +12,10 @@
 package io.vertx.core.shareddata.impl;
 
 import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.impl.Arguments;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.shareddata.AsyncMap;
 import io.vertx.core.shareddata.Counter;
@@ -54,82 +54,99 @@ public class SharedDataImpl implements SharedData {
 
   @Override
   public <K, V> void getClusterWideMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
-    Objects.requireNonNull(name, "name");
     Objects.requireNonNull(resultHandler, "resultHandler");
+    this.<K, V>getClusterWideMap(name).setHandler(resultHandler);
+  }
+
+  @Override
+  public <K, V> Future<AsyncMap<K, V>> getClusterWideMap(String name) {
+    Objects.requireNonNull(name, "name");
     if (clusterManager == null) {
       throw new IllegalStateException("Can't get cluster wide map if not clustered");
     }
-    clusterManager.<K, V>getAsyncMap(name, ar -> {
-      if (ar.succeeded()) {
-        // Wrap it
-        resultHandler.handle(Future.succeededFuture(new WrappedAsyncMap<K, V>(ar.result())));
-      } else {
-        resultHandler.handle(Future.failedFuture(ar.cause()));
-      }
-    });
+    return clusterManager.<K, V>getAsyncMap(name).map(WrappedAsyncMap::new);
   }
 
   @Override
   public <K, V> void getAsyncMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
-    Objects.requireNonNull(name, "name");
     Objects.requireNonNull(resultHandler, "resultHandler");
+    this.<K, V>getAsyncMap(name).setHandler(resultHandler);
+  }
+
+  @Override
+  public <K, V> Future<AsyncMap<K, V>> getAsyncMap(String name) {
+    Objects.requireNonNull(name, "name");
     if (clusterManager == null) {
-      getLocalAsyncMap(name, resultHandler);
+      return getLocalAsyncMap(name);
     } else {
-      clusterManager.<K, V>getAsyncMap(name, ar -> {
-        if (ar.succeeded()) {
-          // Wrap it
-          resultHandler.handle(Future.succeededFuture(new WrappedAsyncMap<K, V>(ar.result())));
-        } else {
-          resultHandler.handle(Future.failedFuture(ar.cause()));
-        }
-      });
+      return clusterManager.<K, V>getAsyncMap(name).map(WrappedAsyncMap::new);
     }
   }
 
   @Override
   public void getLock(String name, Handler<AsyncResult<Lock>> resultHandler) {
-    Objects.requireNonNull(name, "name");
-    Objects.requireNonNull(resultHandler, "resultHandler");
     getLockWithTimeout(name, DEFAULT_LOCK_TIMEOUT, resultHandler);
   }
 
   @Override
+  public Future<Lock> getLock(String name) {
+    return getLockWithTimeout(name, DEFAULT_LOCK_TIMEOUT);
+  }
+
+  @Override
   public void getLockWithTimeout(String name, long timeout, Handler<AsyncResult<Lock>> resultHandler) {
-    Objects.requireNonNull(name, "name");
     Objects.requireNonNull(resultHandler, "resultHandler");
+    getLockWithTimeout(name, timeout).setHandler(resultHandler);
+  }
+
+  @Override
+  public Future<Lock> getLockWithTimeout(String name, long timeout) {
+    Objects.requireNonNull(name, "name");
     Arguments.require(timeout >= 0, "timeout must be >= 0");
     if (clusterManager == null) {
-      getLocalLockWithTimeout(name, timeout, resultHandler);
+      return getLocalLockWithTimeout(name, timeout);
     } else {
-      clusterManager.getLockWithTimeout(name, timeout, resultHandler);
+      return clusterManager.getLockWithTimeout(name, timeout);
     }
   }
 
   @Override
   public void getLocalLock(String name, Handler<AsyncResult<Lock>> resultHandler) {
-    Objects.requireNonNull(name, "name");
-    Objects.requireNonNull(resultHandler, "resultHandler");
     getLocalLockWithTimeout(name, DEFAULT_LOCK_TIMEOUT, resultHandler);
   }
 
   @Override
+  public Future<Lock> getLocalLock(String name) {
+    return getLocalLockWithTimeout(name, DEFAULT_LOCK_TIMEOUT);
+  }
+
+  @Override
   public void getLocalLockWithTimeout(String name, long timeout, Handler<AsyncResult<Lock>> resultHandler) {
-    Objects.requireNonNull(name, "name");
     Objects.requireNonNull(resultHandler, "resultHandler");
+    getLocalLockWithTimeout(name, timeout).setHandler(resultHandler);
+  }
+
+  @Override
+  public Future<Lock> getLocalLockWithTimeout(String name, long timeout) {
+    Objects.requireNonNull(name, "name");
     Arguments.require(timeout >= 0, "timeout must be >= 0");
-    localAsyncLocks.acquire(vertx.getOrCreateContext(), name, timeout, resultHandler);
+    return localAsyncLocks.acquire(vertx.getOrCreateContext(), name, timeout);
+  }
+
+  @Override
+  public Future<Counter> getCounter(String name) {
+    Objects.requireNonNull(name, "name");
+    if (clusterManager == null) {
+      return getLocalCounter(name);
+    } else {
+      return clusterManager.getCounter(name);
+    }
   }
 
   @Override
   public void getCounter(String name, Handler<AsyncResult<Counter>> resultHandler) {
-    Objects.requireNonNull(name, "name");
     Objects.requireNonNull(resultHandler, "resultHandler");
-    if (clusterManager == null) {
-      getLocalCounter(name, resultHandler);
-    } else {
-      clusterManager.getCounter(name, resultHandler);
-    }
+    getCounter(name).setHandler(resultHandler);
   }
 
   /**
@@ -142,18 +159,31 @@ public class SharedDataImpl implements SharedData {
     return (LocalMap<K, V>) localMaps.computeIfAbsent(name, n -> new LocalMapImpl<>(n, localMaps));
   }
 
-  @SuppressWarnings("unchecked")
   @Override
   public <K, V> void getLocalAsyncMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
+    Objects.requireNonNull(resultHandler, "resultHandler");
+    this.<K, V>getLocalAsyncMap(name).setHandler(resultHandler);
+  }
+
+  @SuppressWarnings("unchecked")
+  @Override
+  public <K, V> Future<AsyncMap<K, V>> getLocalAsyncMap(String name) {
     LocalAsyncMapImpl<K, V> asyncMap = (LocalAsyncMapImpl<K, V>) localAsyncMaps.computeIfAbsent(name, n -> new LocalAsyncMapImpl<>(vertx));
-    resultHandler.handle(Future.succeededFuture(new WrappedAsyncMap<>(asyncMap)));
+    ContextInternal context = vertx.getOrCreateContext();
+    return context.succeededFuture(new WrappedAsyncMap<>(asyncMap));
   }
 
   @Override
   public void getLocalCounter(String name, Handler<AsyncResult<Counter>> resultHandler) {
+    Objects.requireNonNull(resultHandler, "resultHandler");
+    getLocalCounter(name).setHandler(resultHandler);
+  }
+
+  @Override
+  public Future<Counter> getLocalCounter(String name) {
     Counter counter = localCounters.computeIfAbsent(name, n -> new AsynchronousCounter(vertx));
-    Context context = vertx.getOrCreateContext();
-    context.runOnContext(v -> resultHandler.handle(Future.succeededFuture(counter)));
+    ContextInternal context = vertx.getOrCreateContext();
+    return context.succeededFuture(counter);
   }
 
   private static void checkType(Object obj) {
@@ -191,86 +221,90 @@ public class SharedDataImpl implements SharedData {
     }
 
     @Override
-    public void get(K k, Handler<AsyncResult<V>> asyncResultHandler) {
-      delegate.get(k, asyncResultHandler);
+    public Future<V> get(K k) {
+      checkType(k);
+      return delegate.get(k);
     }
 
     @Override
-    public void put(K k, V v, Handler<AsyncResult<Void>> completionHandler) {
+    public Future<Void> put(K k, V v) {
       checkType(k);
       checkType(v);
-      delegate.put(k, v, completionHandler);
+      return delegate.put(k, v);
     }
 
     @Override
-    public void put(K k, V v, long timeout, Handler<AsyncResult<Void>> completionHandler) {
+    public Future<Void> put(K k, V v, long ttl) {
       checkType(k);
       checkType(v);
-      delegate.put(k, v, timeout, completionHandler);
+      return delegate.put(k, v, ttl);
     }
 
     @Override
-    public void putIfAbsent(K k, V v, Handler<AsyncResult<V>> completionHandler) {
+    public Future<V> putIfAbsent(K k, V v) {
       checkType(k);
       checkType(v);
-      delegate.putIfAbsent(k, v, completionHandler);
+      return delegate.putIfAbsent(k, v);
     }
 
     @Override
-    public void putIfAbsent(K k, V v, long timeout, Handler<AsyncResult<V>> completionHandler) {
+    public Future<V> putIfAbsent(K k, V v, long ttl) {
       checkType(k);
       checkType(v);
-      delegate.putIfAbsent(k, v, timeout, completionHandler);
+      return delegate.putIfAbsent(k, v, ttl);
     }
 
     @Override
-    public void remove(K k, Handler<AsyncResult<V>> resultHandler) {
-      delegate.remove(k, resultHandler);
+    public Future<V> remove(K k) {
+      checkType(k);
+      return delegate.remove(k);
     }
 
     @Override
-    public void removeIfPresent(K k, V v, Handler<AsyncResult<Boolean>> resultHandler) {
-      delegate.removeIfPresent(k, v, resultHandler);
-    }
-
-    @Override
-    public void replace(K k, V v, Handler<AsyncResult<V>> resultHandler) {
+    public Future<Boolean> removeIfPresent(K k, V v) {
       checkType(k);
       checkType(v);
-      delegate.replace(k, v, resultHandler);
+      return delegate.removeIfPresent(k, v);
     }
 
     @Override
-    public void replaceIfPresent(K k, V oldValue, V newValue, Handler<AsyncResult<Boolean>> resultHandler) {
+    public Future<V> replace(K k, V v) {
+      checkType(k);
+      checkType(v);
+      return delegate.replace(k, v);
+    }
+
+    @Override
+    public Future<Boolean> replaceIfPresent(K k, V oldValue, V newValue) {
       checkType(k);
       checkType(oldValue);
       checkType(newValue);
-      delegate.replaceIfPresent(k, oldValue, newValue, resultHandler);
+      return delegate.replaceIfPresent(k, oldValue, newValue);
     }
 
     @Override
-    public void clear(Handler<AsyncResult<Void>> resultHandler) {
-      delegate.clear(resultHandler);
+    public Future<Void> clear() {
+      return delegate.clear();
     }
 
     @Override
-    public void size(Handler<AsyncResult<Integer>> resultHandler) {
-      delegate.size(resultHandler);
+    public Future<Integer> size() {
+      return delegate.size();
     }
 
     @Override
-    public void keys(Handler<AsyncResult<Set<K>>> resultHandler) {
-      delegate.keys(resultHandler);
+    public Future<Set<K>> keys() {
+      return delegate.keys();
     }
 
     @Override
-    public void values(Handler<AsyncResult<List<V>>> asyncResultHandler) {
-      delegate.values(asyncResultHandler);
+    public Future<List<V>> values() {
+      return delegate.values();
     }
 
     @Override
-    public void entries(Handler<AsyncResult<Map<K, V>>> asyncResultHandler) {
-      delegate.entries(asyncResultHandler);
+    public Future<Map<K, V>> entries() {
+      return delegate.entries();
     }
 
     public AsyncMap<K, V> getDelegate() {

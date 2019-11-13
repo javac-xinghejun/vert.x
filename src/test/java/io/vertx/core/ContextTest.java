@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -11,16 +11,20 @@
 
 package io.vertx.core;
 
+import io.netty.channel.EventLoop;
 import io.vertx.core.impl.*;
 import io.vertx.test.core.VertxTestBase;
 import org.junit.Test;
 
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -35,7 +39,7 @@ public class ContextTest extends VertxTestBase {
 
   @Override
   public void setUp() throws Exception {
-    workerExecutor = Executors.newSingleThreadExecutor(r -> new VertxThread(r, "vert.x-worker-thread", true, 10, TimeUnit.SECONDS));
+    workerExecutor = Executors.newFixedThreadPool(2, r -> new VertxThread(r, "vert.x-worker-thread", true, 10, TimeUnit.SECONDS));
     super.setUp();
   }
 
@@ -183,7 +187,7 @@ public class ContextTest extends VertxTestBase {
 
     // Check from other thread
     try {
-      eventLoopContext.executeFromIO(v -> fail());
+      eventLoopContext.emitFromIO(v -> fail());
       fail();
     } catch (IllegalStateException expected) {
     }
@@ -194,7 +198,7 @@ public class ContextTest extends VertxTestBase {
       assertNull(Vertx.currentContext());
       Thread vertxThread = Thread.currentThread();
       AtomicBoolean nested = new AtomicBoolean(true);
-      eventLoopContext.executeFromIO(v -> {
+      eventLoopContext.emitFromIO(v -> {
         assertTrue(nested.get());
         assertSame(eventLoopContext, Vertx.currentContext());
         assertSame(vertxThread, Thread.currentThread());
@@ -211,7 +215,7 @@ public class ContextTest extends VertxTestBase {
     workerContext.nettyEventLoop().execute(() -> {
       assertNull(Vertx.currentContext());
       workerContext.nettyEventLoop().execute(() -> {
-        workerContext.executeFromIO(v -> {
+        workerContext.emitFromIO(v -> {
           assertSame(workerContext, Vertx.currentContext());
           assertTrue(Context.isOnWorkerThread());
           testComplete();
@@ -303,8 +307,8 @@ public class ContextTest extends VertxTestBase {
     ctx.runOnContext(v -> {
       vertx.deployVerticle(new AbstractVerticle() {
         @Override
-        public void start(Promise<Void> startFuture) throws Exception {
-          context.runOnContext(startFuture::complete);
+        public void start(Promise<Void> startPromise) throws Exception {
+          context.runOnContext(startPromise::complete);
         }
       }, ar -> {
         throw failure;
@@ -435,7 +439,7 @@ public class ContextTest extends VertxTestBase {
     ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
     AtomicBoolean called = new AtomicBoolean();
     try {
-      ctx.executeFromIO(v -> {
+      ctx.emitFromIO(v -> {
         called.set(true);
       });
       fail();
@@ -451,7 +455,7 @@ public class ContextTest extends VertxTestBase {
     ContextInternal ctx = createWorkerContext();
     AtomicBoolean called = new AtomicBoolean();
     try {
-      ctx.executeFromIO(v -> {
+      ctx.emitFromIO(v -> {
         called.set(true);
       });
       fail();
@@ -461,6 +465,214 @@ public class ContextTest extends VertxTestBase {
     assertFalse(called.get());
   }
 
+  @Test
+  public void testEventLoopContextExecuteFromAnyThread() {
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    Object expected = new Object();
+    ctx.emit(expected, event -> {
+      assertSame(ctx, Vertx.currentContext());
+      assertTrue(Context.isOnEventLoopThread());
+      assertSame(expected, event);
+      testComplete();
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextExecuteFromSameContext() {
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    Object expected = new Object();
+    ctx.runOnContext(v -> {
+      ThreadLocal<Boolean> local = new ThreadLocal<>();
+      local.set(true);
+      ctx.emit(expected, event -> {
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnEventLoopThread());
+        assertEquals(true, local.get());
+        assertSame(expected, event);
+        testComplete();
+      });
+      local.set(false);
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextExecuteFromSameEventLoop() {
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    Object expected = new Object();
+    ctx.nettyEventLoop().execute(() -> {
+      Thread t = Thread.currentThread();
+      ThreadLocal<Boolean> local = new ThreadLocal<>();
+      local.set(true);
+      ctx.emit(expected, event -> {
+        assertSame(t, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnEventLoopThread());
+        assertEquals(true, local.get());
+        assertSame(expected, event);
+        testComplete();
+      });
+      local.set(false);
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextExecuteFromAnyContext() {
+    ContextInternal any = (ContextInternal) vertx.getOrCreateContext();
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    Object expected = new Object();
+    any.runOnContext(v -> {
+      Thread thread = Thread.currentThread();
+      ctx.emit(expected, event -> {
+        assertNotSame(thread, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnEventLoopThread());
+        assertSame(expected, event);
+        testComplete();
+      });
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextExecuteFromAnyEventLoop() {
+    ContextInternal any = (ContextInternal) vertx.getOrCreateContext();
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    Object expected = new Object();
+    any.nettyEventLoop().execute(() -> {
+      Thread thread = Thread.currentThread();
+      ctx.emit(expected, event -> {
+        assertNotSame(thread, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnEventLoopThread());
+        assertSame(expected, event);
+        testComplete();
+      });
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextExecuteReportsFailure() {
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    RuntimeException failure = new RuntimeException();
+    AtomicReference<Throwable> caught = new AtomicReference<>();
+    ctx.exceptionHandler(caught::set);
+    ctx.emit(new Object(), event -> {
+      throw failure;
+    });
+    assertWaitUntil(() -> caught.get() == failure);
+  }
+
+  @Test
+  public void testWorkerContextExecuteFromAnyThread() {
+    ContextInternal ctx = createWorkerContext();
+    Object expected = new Object();
+    ctx.emit(expected, event -> {
+      assertSame(ctx, Vertx.currentContext());
+      assertTrue(Context.isOnWorkerThread());
+      assertSame(expected, event);
+      testComplete();
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerContextExecuteFromSameContext() {
+    ContextInternal ctx = createWorkerContext();
+    Object expected = new Object();
+    ctx.runOnContext(v -> {
+      ThreadLocal<Boolean> local = new ThreadLocal<>();
+      local.set(true);
+      ctx.emit(expected, event -> {
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnWorkerThread());
+        assertEquals(true, local.get());
+        assertSame(expected, event);
+        testComplete();
+      });
+      local.set(false);
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerContextExecuteFromSameEventLoop() {
+    ContextInternal ctx = createWorkerContext();
+    Object expected = new Object();
+    ctx.nettyEventLoop().execute(() -> {
+      Thread t = Thread.currentThread();
+      ThreadLocal<Boolean> local = new ThreadLocal<>();
+      local.set(true);
+      ctx.emit(expected, event -> {
+        assertNotSame(t, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnWorkerThread());
+        assertNotSame(true, local.get());
+        assertSame(expected, event);
+        testComplete();
+      });
+      local.set(false);
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerContextExecuteFromAnyContext() {
+    ContextInternal any = createWorkerContext();
+    ContextInternal ctx = createWorkerContext();
+    Object expected = new Object();
+    any.runOnContext(v -> {
+      Thread thread = Thread.currentThread();
+      ctx.emit(expected, event -> {
+        assertNotSame(thread, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnWorkerThread());
+        assertSame(expected, event);
+        testComplete();
+      });
+      try {
+        // Allow the nested context exec to use the other worker pool thread
+        Thread.sleep(500);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerContextExecuteFromAnyEventLoop() {
+    ContextInternal any = (ContextInternal) vertx.getOrCreateContext();
+    ContextInternal ctx = createWorkerContext();
+    Object expected = new Object();
+    any.nettyEventLoop().execute(() -> {
+      Thread thread = Thread.currentThread();
+      ctx.emit(expected, event -> {
+        assertNotSame(thread, Thread.currentThread());
+        assertSame(ctx, Vertx.currentContext());
+        assertTrue(Context.isOnWorkerThread());
+        assertSame(expected, event);
+        testComplete();
+      });
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerContextExecuteReportsFailure() {
+    ContextInternal ctx = createWorkerContext();
+    RuntimeException failure = new RuntimeException();
+    AtomicReference<Throwable> caught = new AtomicReference<>();
+    ctx.exceptionHandler(caught::set);
+    ctx.emit(new Object(), event -> {
+      throw failure;
+    });
+    assertWaitUntil(() -> caught.get() == failure);
+  }
+  
   @Test
   public void testReportExceptionToContext() {
     ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
@@ -592,6 +804,234 @@ public class ContextTest extends VertxTestBase {
       assertSame(ctx, Vertx.currentContext());
       assertSame(cl, Thread.currentThread().getContextClassLoader());
       testComplete();
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseReentrantSuccess() {
+    testEventLoopContextPromiseReentrantCompletion(p -> p.complete("the-value"));
+  }
+
+  private void testEventLoopContextPromiseReentrantCompletion(Consumer<Promise<String>> action) {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    context.runOnContext(v -> {
+      Thread th = Thread.currentThread();
+      promise.future().setHandler(ar -> {
+        assertSame(th, Thread.currentThread());
+        testComplete();
+      });
+      action.accept(promise);
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseReentrantFailingSuccess() {
+    testEventLoopContextPromiseReentrantFailingCompletion(p -> p.complete("the-value"));
+  }
+
+  @Test
+  public void testEventLoopContextPromiseReentrantFailingFailure() {
+    testEventLoopContextPromiseReentrantFailingCompletion(p -> p.fail(new Exception()));
+  }
+
+  private void testEventLoopContextPromiseReentrantFailingCompletion(Consumer<Promise<String>> action) {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    context.runOnContext(v -> {
+      List<Throwable> exceptions = new ArrayList<>();
+      context.exceptionHandler(exceptions::add);
+      RuntimeException failure = new RuntimeException();
+      promise.future().setHandler(ar -> {
+        throw failure;
+      });
+      action.accept(promise);
+      assertEquals(1, exceptions.size());
+      assertSame(failure, exceptions.get(0));
+      testComplete();
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseSucceededByAnotherEventLoopThread() {
+    testEventLoopContextPromiseCompletedByAnotherEventLoopThread(p -> p.complete("the-value"));
+  }
+
+  @Test
+  public void testEventLoopContextPromiseFailedByAnotherEventLoopThread() {
+    testEventLoopContextPromiseCompletedByAnotherEventLoopThread(p -> p.fail(new Exception()));
+  }
+
+  void testEventLoopContextPromiseCompletedByAnotherEventLoopThread(Consumer<Promise<String>> action) {
+    Context any = vertx.getOrCreateContext();
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    context.runOnContext(v1 -> {
+      Thread th = Thread.currentThread();
+      promise.future().setHandler(ar -> {
+        assertSame(th, Thread.currentThread());
+        testComplete();
+      });
+      any.runOnContext(v2 -> {
+        action.accept(promise);
+      });
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseSucceededByWorkerThread() {
+    testEventLoopContextPromiseCompletedByWorkerThread(p -> p.complete("the-value"));
+  }
+
+  @Test
+  public void testEventLoopContextPromiseFailedByWorkerThread() {
+    testEventLoopContextPromiseCompletedByWorkerThread(p -> p.fail(new Exception()));
+  }
+
+  private void testEventLoopContextPromiseCompletedByWorkerThread(Consumer<Promise<String>> action) {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    context.runOnContext(v -> {
+      Thread th = Thread.currentThread();
+      promise.future().setHandler(ar -> {
+        assertSame(th, Thread.currentThread());
+        testComplete();
+      });
+      context.executeBlocking(fut -> {
+        action.accept(promise);
+      });
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseSucceededByNonVertxThread() {
+    testEventLoopContextPromiseCompletedByNonVertxThread(p -> p.complete("the-value"));
+  }
+
+  @Test
+  public void testEventLoopContextPromiseFailedByNonVertxThread() {
+    testEventLoopContextPromiseCompletedByNonVertxThread(p -> p.fail(new Exception()));
+  }
+
+  private void testEventLoopContextPromiseCompletedByNonVertxThread(Consumer<Promise<String>> action) {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    context.runOnContext(v -> {
+      Thread th = Thread.currentThread();
+      promise.future().setHandler(ar -> {
+        assertSame(th, Thread.currentThread());
+        testComplete();
+      });
+      new Thread(() -> action.accept(promise)).start();
+    });
+    await();
+  }
+
+  @Test
+  public void testEventLoopContextPromiseListenerSuccess() {
+    testEventLoopContextPromiseListenerCompletion(p -> p.setSuccess("the-value"));
+  }
+
+  @Test
+  public void testEventLoopContextPromiseListenerFailure() {
+    testEventLoopContextPromiseListenerCompletion(p -> p.setFailure(new Exception()));
+  }
+
+  private void testEventLoopContextPromiseListenerCompletion(Consumer<io.netty.util.concurrent.Promise<String>> action) {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    PromiseInternal<String> promise = context.promise();
+    promise.future().setHandler(ar -> {
+      assertSame(context, Vertx.currentContext());
+      testComplete();
+    });
+    EventLoop eventLoop = context.nettyEventLoop();
+    action.accept(eventLoop.<String>newPromise().addListener(promise));
+    await();
+  }
+
+  @Test
+  public void testComposeContextPropagation1() {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    Future<String> future = promise.future().compose(res -> Future.succeededFuture("value-2"));
+    promise.complete("value-1");
+    future.setHandler(ar -> {
+      assertSame(context, vertx.getOrCreateContext());
+      testComplete();
+    });
+    await();
+  }
+
+  @Test
+  public void testComposeContextPropagation2() {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    Future<String> future = promise.future().compose(res -> Future.succeededFuture("value-2"));
+    future.setHandler(ar -> {
+      assertSame(context, vertx.getOrCreateContext());
+      testComplete();
+    });
+    promise.complete("value-1");
+    await();
+  }
+
+  @Test
+  public void testComposeContextPropagation3() {
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> promise = context.promise();
+    ContextInternal anotherContext = (ContextInternal) vertx.getOrCreateContext();
+    Promise<String> anotherPromise = anotherContext.promise();
+    Future<String> future = promise.future().compose(res -> anotherPromise.future());
+    promise.complete("value-1");
+    future.setHandler(ar -> {
+      assertSame(context, vertx.getOrCreateContext());
+      testComplete();
+    });
+    anotherPromise.complete("value-2");
+    await();
+  }
+
+  @Test
+  public void testEventLoopExecutor() {
+    waitFor(2);
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    context.execute(() -> {
+      assertTrue(Context.isOnEventLoopThread());
+      assertSame(context, Vertx.currentContext());
+      complete();
+    });
+    RuntimeException failure = new RuntimeException();
+    context.exceptionHandler(err -> {
+      assertSame(failure, err);
+      complete();
+    });
+    context.execute(() -> {
+      throw failure;
+    });
+    await();
+  }
+
+  @Test
+  public void testWorkerExecutor() {
+    waitFor(2);
+    ContextInternal context = createWorkerContext();
+    context.execute(() -> {
+      assertTrue(Context.isOnWorkerThread());
+      assertSame(context, Vertx.currentContext());
+      complete();
+    });
+    RuntimeException failure = new RuntimeException();
+    context.exceptionHandler(err -> {
+      assertSame(failure, err);
+      complete();
+    });
+    context.execute(() -> {
+      throw failure;
     });
     await();
   }

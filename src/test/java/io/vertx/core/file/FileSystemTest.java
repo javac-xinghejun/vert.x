@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -1538,8 +1538,8 @@ public class FileSystemTest extends VertxTestBase {
         rs.setReadBufferSize(readBufferSize);
         final Buffer buff = Buffer.buffer();
         final int[] appendCount = new int[] {0};
-        rs.handler((rsBuff) -> { 
-          buff.appendBuffer(rsBuff); 
+        rs.handler((rsBuff) -> {
+          buff.appendBuffer(rsBuff);
           appendCount[0]++;
           });
         rs.exceptionHandler(t -> fail(t.getMessage()));
@@ -1561,6 +1561,25 @@ public class FileSystemTest extends VertxTestBase {
         fail(ar.cause().getMessage());
       }
     });
+    await();
+  }
+
+  @Test
+  public void testReadStreamNoLock() throws Exception {
+    String fileName = "some-file.dat";
+    int chunkSize = 16384;
+    int chunks = 1;
+    byte[] content = TestUtils.randomByteArray(chunkSize * chunks);
+    createFile(fileName, content);
+    vertx.fileSystem().open(testDir + pathSep + fileName, new OpenOptions(), onSuccess(rs -> {
+      rs.handler(buff -> {
+        assertFalse(Thread.holdsLock(rs));
+      });
+      rs.endHandler(v -> {
+        assertFalse(Thread.holdsLock(rs));
+        testComplete();
+      });
+    }));
     await();
   }
 

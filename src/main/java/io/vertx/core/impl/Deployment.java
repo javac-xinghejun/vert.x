@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -13,6 +13,7 @@ package io.vertx.core.impl;
 
 import io.vertx.core.AsyncResult;
 import io.vertx.core.DeploymentOptions;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Verticle;
 import io.vertx.core.json.JsonObject;
@@ -28,9 +29,17 @@ public interface Deployment {
 
   void removeChild(Deployment deployment);
 
-  void undeploy(Handler<AsyncResult<Void>> completionHandler);
+  default void undeploy(Handler<AsyncResult<Void>> completionHandler) {
+    undeploy().setHandler(completionHandler);
+  }
 
-  void doUndeploy(ContextInternal undeployingContext, Handler<AsyncResult<Void>> completionHandler);
+  Future<Void> undeploy();
+
+  default void doUndeploy(ContextInternal undeployingContext, Handler<AsyncResult<Void>> completionHandler) {
+    doUndeploy(undeployingContext).setHandler(completionHandler);
+  }
+
+  Future<Void> doUndeploy(ContextInternal undeployingContext);
 
   JsonObject config();
 

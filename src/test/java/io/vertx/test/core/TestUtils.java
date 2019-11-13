@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -319,7 +319,7 @@ public class TestUtils {
     }
   }
 
-  public static void assertIllegalStateException2(Supplier<Future<?>> runnable) {
+  public static void assertIllegalStateExceptionAsync(Supplier<Future<?>> runnable) {
     Future<?> fut = runnable.get();
     assertTrue(fut.failed());
     assertTrue(fut.cause() instanceof IllegalStateException);

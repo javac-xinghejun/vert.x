@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -12,15 +12,18 @@
 package io.vertx.core.http.impl;
 
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.*;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.ChannelGroupFuture;
 import io.netty.channel.group.DefaultChannelGroup;
+import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
 import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -70,7 +73,7 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
 
   private ChannelGroup serverChannelGroup;
   private volatile boolean listening;
-  private AsyncResolveConnectHelper bindFuture;
+  private io.netty.util.concurrent.Future<Channel> bindFuture;
   private ServerID id;
   private HttpServerImpl actualServer;
   private volatile int actualPort;
@@ -140,44 +143,44 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
 
   @Override
   public Future<HttpServer> listen() {
-    Promise<HttpServer> promise = Promise.promise();
-    listen(options.getPort(), options.getHost(), promise);
-    return promise.future();
+    return listen(options.getPort(), options.getHost());
   }
 
   @Override
   public HttpServer listen(Handler<AsyncResult<HttpServer>> listenHandler) {
-    return listen(options.getPort(), options.getHost(), listenHandler);
+    Future<HttpServer> fut = listen();
+    if (listenHandler != null) {
+      fut.setHandler(listenHandler);
+    }
+    return this;
   }
 
   @Override
   public Future<HttpServer> listen(int port, String host) {
-    Promise<HttpServer> promise = Promise.promise();
-    listen(port, host, promise);
-    return promise.future();
+    return listen(SocketAddress.inetSocketAddress(port, host));
+  }
+
+  @Override
+  public HttpServer listen(int port, String host, Handler<AsyncResult<HttpServer>> listenHandler) {
+    Future<HttpServer> fut = listen(port, host);
+    if (listenHandler != null) {
+      fut.setHandler(listenHandler);
+    }
+    return this;
   }
 
   @Override
   public Future<HttpServer> listen(int port) {
-    Promise<HttpServer> promise = Promise.promise();
-    listen(port, "0.0.0.0", promise);
-    return promise.future();
+    return listen(port, "0.0.0.0");
   }
 
   @Override
   public HttpServer listen(int port, Handler<AsyncResult<HttpServer>> listenHandler) {
-    return listen(port, "0.0.0.0", listenHandler);
-  }
-
-  public HttpServer listen(int port, String host, Handler<AsyncResult<HttpServer>> listenHandler) {
-    return listen(SocketAddress.inetSocketAddress(port, host), listenHandler);
-  }
-
-  @Override
-  public Future<HttpServer> listen(SocketAddress address) {
-    Promise<HttpServer> promise = Promise.promise();
-    listen(address, promise);
-    return promise.future();
+    Future<HttpServer> fut = listen(port);
+    if (listenHandler != null) {
+      fut.setHandler(listenHandler);
+    }
+    return this;
   }
 
   private ChannelHandler childHandler(SocketAddress address, String serverOrigin) {
@@ -210,7 +213,8 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
     };
   }
 
-  public synchronized HttpServer listen(SocketAddress address, Handler<AsyncResult<HttpServer>> listenHandler) {
+  @Override
+  public Future<HttpServer> listen(SocketAddress address) {
     if (requestStream.handler() == null && wsStream.handler() == null) {
       throw new IllegalStateException("Set request or websocket handler first");
     }
@@ -226,10 +230,11 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
       applicationProtocols =  applicationProtocols.stream().filter(v -> v != HttpVersion.HTTP_2).collect(Collectors.toList());
     }
     sslHelper.setApplicationProtocols(applicationProtocols);
-    synchronized (vertx.sharedHttpServers()) {
+    Map<ServerID, HttpServerImpl> sharedHttpServers = vertx.sharedHttpServers();
+    synchronized (sharedHttpServers) {
       this.actualPort = port; // Will be updated on bind for a wildcard port
       id = new ServerID(port, host);
-      HttpServerImpl shared = vertx.sharedHttpServers().get(id);
+      HttpServerImpl shared = sharedHttpServers.get(id);
       if (shared == null || port == 0) {
         serverChannelGroup = new DefaultChannelGroup("vertx-acceptor-channels", GlobalEventExecutor.INSTANCE);
         ServerBootstrap bootstrap = new ServerBootstrap();
@@ -241,11 +246,18 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
         addHandlers(this, listenContext);
         try {
           bindFuture = AsyncResolveConnectHelper.doBind(vertx, address, bootstrap);
-          bindFuture.addListener(res -> {
-            if (res.failed()) {
-              vertx.sharedHttpServers().remove(id);
+          bindFuture.addListener((GenericFutureListener<io.netty.util.concurrent.Future<Channel>>) res -> {
+            if (!res.isSuccess()) {
+              synchronized (sharedHttpServers) {
+                sharedHttpServers.remove(id);
+              }
+              listening  = false;
+              if (metrics != null) {
+                metrics.close();
+                metrics = null;
+              }
             } else {
-              Channel serverChannel = res.result();
+              Channel serverChannel = res.getNow();
               if (serverChannel.localAddress() instanceof InetSocketAddress) {
                 HttpServerImpl.this.actualPort = ((InetSocketAddress)serverChannel.localAddress()).getPort();
               } else {
@@ -255,17 +267,10 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
             }
           });
         } catch (final Throwable t) {
-          // Make sure we send the exception back through the handler (if any)
-          if (listenHandler != null) {
-            vertx.runOnContext(v -> listenHandler.handle(Future.failedFuture(t)));
-          } else {
-            // No handler - log so user can see failure
-            log.error(t);
-          }
           listening = false;
-          return this;
+          return listenContext.failedFuture(t);
         }
-        vertx.sharedHttpServers().put(id, this);
+        sharedHttpServers.put(id, this);
         actualServer = this;
       } else {
         // Server already exists with that host/port - we will use that
@@ -275,27 +280,29 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
         VertxMetrics metrics = vertx.metricsSPI();
         this.metrics = metrics != null ? metrics.createHttpServerMetrics(options, address) : null;
       }
-      actualServer.bindFuture.addListener(future -> {
-        if (listenHandler != null) {
-          final AsyncResult<HttpServer> res;
-          if (future.succeeded()) {
-            res = Future.succeededFuture(HttpServerImpl.this);
-          } else {
-            res = Future.failedFuture(future.cause());
-            listening = false;
-          }
-          listenContext.runOnContext((v) -> listenHandler.handle(res));
-        } else if (future.failed()) {
-          listening  = false;
-          if (metrics != null) {
-            metrics.close();
-            metrics = null;
-          }
-          // No handler - log so user can see failure
-          log.error(future.cause());
+      Promise<HttpServer> promise = listenContext.promise();
+      actualServer.bindFuture.addListener(res -> {
+        if (res.isSuccess()) {
+          promise.complete(this);
+        } else {
+          promise.fail(res.cause());
         }
       });
+      return promise.future();
     }
+  }
+
+  @Override
+  public HttpServer listen(SocketAddress address, Handler<AsyncResult<HttpServer>> listenHandler) {
+    if (listenHandler == null) {
+      listenHandler = res -> {
+        if (res.failed()) {
+          // No handler - log so user can see failure
+          log.error("Failed to listen", res.cause());
+        }
+      };
+    }
+    listen(address).setHandler(listenHandler);
     return this;
   }
 
@@ -313,37 +320,41 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
 
   @Override
   public Future<Void> close() {
-    Promise<Void> promise = Promise.promise();
+    ContextInternal context = vertx.getOrCreateContext();
+    PromiseInternal<Void> promise = context.promise();
     close(promise);
     return promise.future();
   }
 
   @Override
-  public synchronized void close(Handler<AsyncResult<Void>> done) {
+  public void close(Handler<AsyncResult<Void>> done) {
+    ContextInternal context = vertx.getOrCreateContext();
+    PromiseInternal<Void> promise = context.promise();
+    close(promise);
+    if (done != null) {
+      promise.future().setHandler(done);
+    }
+  }
+
+  public synchronized void close(Promise<Void> completion) {
     if (wsStream.endHandler() != null || requestStream.endHandler() != null) {
       Handler<Void> wsEndHandler = wsStream.endHandler();
       wsStream.endHandler(null);
       Handler<Void> requestEndHandler = requestStream.endHandler();
       requestStream.endHandler(null);
-      Handler<AsyncResult<Void>> next = done;
-      done = event -> {
-          if (event.succeeded()) {
-            if (wsEndHandler != null) {
-              wsEndHandler.handle(event.result());
-            }
-            if (requestEndHandler != null) {
-              requestEndHandler.handle(event.result());
-            }
-          }
-          if (next != null) {
-            next.handle(event);
-          }
-      };
+      completion.future().setHandler(ar -> {
+        if (wsEndHandler != null) {
+          wsEndHandler.handle(null);
+        }
+        if (requestEndHandler != null) {
+          requestEndHandler.handle(null);
+        }
+      });
     }
 
     ContextInternal context = vertx.getOrCreateContext();
     if (!listening) {
-      executeCloseDone(context, done, null);
+      executeCloseDone(context, completion, null);
       return;
     }
     listening = false;
@@ -363,17 +374,17 @@ public class HttpServerImpl implements HttpServer, Closeable, MetricsProvider {
 
         if (actualServer.httpHandlerMgr.hasHandlers()) {
           // The actual server still has handlers so we don't actually close it
-          if (done != null) {
-            executeCloseDone(context, done, null);
+          if (completion != null) {
+            executeCloseDone(context, completion, null);
           }
         } else {
           // No Handlers left so close the actual server
           // The done handler needs to be executed on the context that calls close, NOT the context
           // of the actual server
-          actualServer.actualClose(context, done);
+          actualServer.actualClose(context, completion);
         }
       } else {
-        executeCloseDone(context, done, null);
+        executeCloseDone(context, completion, null);
       }
     }
     if (creatingContext != null) {

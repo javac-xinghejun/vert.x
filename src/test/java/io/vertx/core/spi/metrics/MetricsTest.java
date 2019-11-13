@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -248,7 +248,9 @@ public class MetricsTest extends VertxTestBase {
     consumer.unregister(ar -> {
       assertTrue(ar.succeeded());
       assertEquals(0, metrics.getRegistrations().size());
-      testComplete();
+      consumer.unregister(ar2 -> {
+        testComplete();
+      });
     });
     await();
   }
@@ -293,7 +295,6 @@ public class MetricsTest extends VertxTestBase {
   private void testHandlerProcessMessage(Vertx from, Vertx to, int expectedLocalCount) {
     FakeEventBusMetrics metrics = FakeMetricsBase.getMetrics(to.eventBus());
     CountDownLatch latch1 = new CountDownLatch(1);
-    CountDownLatch latch2 = new CountDownLatch(1);
     to.runOnContext(v -> {
       to.eventBus().consumer(ADDRESS1, msg -> {
         HandlerMetric registration = assertRegistration(metrics);
@@ -309,11 +310,6 @@ public class MetricsTest extends VertxTestBase {
       }).completionHandler(onSuccess(v2 -> {
         to.runOnContext(v3 -> {
           latch1.countDown();
-          try {
-            awaitLatch(latch2);
-          } catch (InterruptedException e) {
-            fail(e);
-          }
         });
       }));
     });
@@ -336,8 +332,6 @@ public class MetricsTest extends VertxTestBase {
       testComplete();
     });
     assertWaitUntil(() -> registration.scheduleCount.get() == 1);
-    assertEquals(0, registration.beginCount.get());
-    latch2.countDown();
     await();
   }
 
@@ -977,7 +971,7 @@ public class MetricsTest extends VertxTestBase {
     CountDownLatch latch = new CountDownLatch(1);
     Verticle worker = new AbstractVerticle() {
       @Override
-      public void start(Promise<Void> done) throws Exception {
+      public void start(Promise<Void> startPromise) throws Exception {
         vertx.eventBus().localConsumer("message", d -> {
             msg.incrementAndGet();
             try {
@@ -1002,7 +996,7 @@ public class MetricsTest extends VertxTestBase {
             }
           }
         );
-        done.complete();
+        startPromise.complete();
       }
     };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -14,21 +14,28 @@ package io.vertx.core.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.Promise;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-class SucceededFuture<T> implements Future<T>, Promise<T> {
+class SucceededFuture<T> implements Future<T> {
 
+  private final ContextInternal context;
   private final T result;
 
   /**
    * Create a future that has already succeeded
+   * @param context the context
    * @param result the result
    */
-  SucceededFuture(T result) {
+  SucceededFuture(ContextInternal context, T result) {
+    this.context = context;
     this.result = result;
+  }
+
+  @Override
+  public ContextInternal context() {
+    return context;
   }
 
   @Override
@@ -37,7 +44,7 @@ class SucceededFuture<T> implements Future<T>, Promise<T> {
   }
 
   @Override
-  public Future<T> setHandler(Handler<AsyncResult<T>> handler) {
+  public Future<T> onComplete(Handler<AsyncResult<T>> handler) {
     handler.handle(this);
     return this;
   }
@@ -45,46 +52,6 @@ class SucceededFuture<T> implements Future<T>, Promise<T> {
   @Override
   public Handler<AsyncResult<T>> getHandler() {
     return null;
-  }
-
-  @Override
-  public void complete(T result) {
-    throw new IllegalStateException("Result is already complete: succeeded");
-  }
-
-  @Override
-  public void complete() {
-    throw new IllegalStateException("Result is already complete: succeeded");
-  }
-
-  @Override
-  public void fail(Throwable cause) {
-    throw new IllegalStateException("Result is already complete: succeeded");
-  }
-
-  @Override
-  public void fail(String failureMessage) {
-    throw new IllegalStateException("Result is already complete: succeeded");
-  }
-
-  @Override
-  public boolean tryComplete(T result) {
-    return false;
-  }
-
-  @Override
-  public boolean tryComplete() {
-    return false;
-  }
-
-  @Override
-  public boolean tryFail(Throwable cause) {
-    return false;
-  }
-
-  @Override
-  public boolean tryFail(String failureMessage) {
-    return false;
   }
 
   @Override
@@ -105,16 +72,6 @@ class SucceededFuture<T> implements Future<T>, Promise<T> {
   @Override
   public boolean failed() {
     return false;
-  }
-
-  @Override
-  public void handle(AsyncResult<T> asyncResult) {
-    throw new IllegalStateException("Result is already complete: succeeded");
-  }
-
-  @Override
-  public Future<T> future() {
-    return this;
   }
 
   @Override

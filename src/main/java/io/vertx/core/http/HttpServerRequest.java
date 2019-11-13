@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -25,6 +25,8 @@ import io.vertx.core.streams.ReadStream;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
 import javax.security.cert.X509Certificate;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Represents a server-side HTTP request.
@@ -362,9 +364,28 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * Set an handler for stream priority changes
    * <p>
    * This is not implemented for HTTP/1.x.
-   * 
+   *
    * @param handler the handler to be called when stream priority changes
    */
   @Fluent
   HttpServerRequest streamPriorityHandler(Handler<StreamPriority> handler);
+
+  /**
+   * Get the cookie with the specified name.
+   *
+   * @param name  the cookie name
+   * @return the cookie
+   */
+  @Nullable Cookie getCookie(String name);
+
+  /**
+   * @return the number of cookieMap.
+   */
+  int cookieCount();
+
+  /**
+   * @return a map of all the cookies.
+   */
+  Map<String, Cookie> cookieMap();
+
 }

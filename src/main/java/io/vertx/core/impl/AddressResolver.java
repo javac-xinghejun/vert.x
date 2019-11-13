@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -11,6 +11,7 @@
 
 package io.vertx.core.impl;
 
+import io.netty.channel.EventLoop;
 import io.netty.resolver.AddressResolverGroup;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -78,19 +79,16 @@ public class AddressResolver {
   }
 
   public void resolveHostname(String hostname, Handler<AsyncResult<InetAddress>> resultHandler) {
-    ContextInternal callback = (ContextInternal) vertx.getOrCreateContext();
-    io.netty.resolver.AddressResolver<InetSocketAddress> resolver = resolverGroup.getResolver(callback.nettyEventLoop());
-    io.netty.util.concurrent.Future<InetSocketAddress> fut = resolver.resolve(InetSocketAddress.createUnresolved(hostname, 0));
-    fut.addListener(a -> {
-      callback.runOnContext(v -> {
-        if (a.isSuccess()) {
-          InetSocketAddress address = fut.getNow();
-          resultHandler.handle(Future.succeededFuture(address.getAddress()));
-        } else {
-          resultHandler.handle(Future.failedFuture(a.cause()));
-        }
-      });
-    });
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    io.netty.util.concurrent.Future<InetSocketAddress> fut = resolveHostname(context.nettyEventLoop(), hostname);
+    PromiseInternal<InetSocketAddress> promise = context.promise();
+    fut.addListener(promise);
+    promise.future().map(InetSocketAddress::getAddress).setHandler(resultHandler);
+  }
+
+  public io.netty.util.concurrent.Future<InetSocketAddress> resolveHostname(EventLoop eventLoop, String hostname) {
+    io.netty.resolver.AddressResolver<InetSocketAddress> resolver = resolverGroup.getResolver(eventLoop);
+    return resolver.resolve(InetSocketAddress.createUnresolved(hostname, 0));
   }
 
   AddressResolverGroup<InetSocketAddress> nettyAddressResolverGroup() {

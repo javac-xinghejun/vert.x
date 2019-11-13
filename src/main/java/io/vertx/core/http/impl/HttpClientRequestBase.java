@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -12,12 +12,14 @@
 package io.vertx.core.http.impl;
 
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.StreamResetException;
+import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.net.SocketAddress;
 
 /**
@@ -39,7 +41,7 @@ public abstract class HttpClientRequestBase implements HttpClientRequest {
   private long lastDataReceived;
   protected final Promise<HttpClientResponse> responsePromise;
 
-  HttpClientRequestBase(HttpClientImpl client, boolean ssl, HttpMethod method, SocketAddress server, String host, int port, String uri) {
+  HttpClientRequestBase(HttpClientImpl client, ContextInternal context, boolean ssl, HttpMethod method, SocketAddress server, String host, int port, String uri) {
     this.client = client;
     this.uri = uri;
     this.method = method;
@@ -49,7 +51,7 @@ public abstract class HttpClientRequestBase implements HttpClientRequest {
     this.path = uri.length() > 0 ? HttpUtils.parsePath(uri) : "";
     this.query = HttpUtils.parseQuery(uri);
     this.ssl = ssl;
-    this.responsePromise = Promise.promise();
+    this.responsePromise = context.promise();
   }
 
   protected String hostHeader() {
@@ -154,7 +156,7 @@ public abstract class HttpClientRequestBase implements HttpClientRequest {
   abstract boolean reset(Throwable cause);
 
   @Override
-  public HttpClientRequest setHandler(Handler<AsyncResult<HttpClientResponse>> handler) {
+  public HttpClientRequest onComplete(Handler<AsyncResult<HttpClientResponse>> handler) {
     responsePromise.future().setHandler(handler);
     return this;
   }

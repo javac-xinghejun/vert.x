@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -16,13 +16,12 @@ import io.netty.buffer.ByteBuf;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.codegen.annotations.VertxGen;
-import io.vertx.core.ServiceHelper;
+import io.vertx.core.buffer.impl.BufferImpl;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.Shareable;
 import io.vertx.core.shareddata.impl.ClusterSerializable;
-import io.vertx.core.spi.BufferFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -46,7 +45,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    * @return the buffer
    */
   static Buffer buffer() {
-    return factory.buffer();
+    return BufferImpl.buffer();
   }
 
   /**
@@ -59,7 +58,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    * @return the buffer
    */
   static Buffer buffer(int initialSizeHint) {
-    return factory.buffer(initialSizeHint);
+    return BufferImpl.buffer(initialSizeHint);
   }
 
   /**
@@ -69,7 +68,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    * @return the buffer
    */
   static Buffer buffer(String string) {
-    return factory.buffer(string);
+    return BufferImpl.buffer(string);
   }
 
   /**
@@ -80,7 +79,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    * @return the buffer
    */
   static Buffer buffer(String string, String enc) {
-    return factory.buffer(string, enc);
+    return BufferImpl.buffer(string, enc);
   }
 
   /**
@@ -91,7 +90,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    */
   @GenIgnore(GenIgnore.PERMITTED_TYPE)
   static Buffer buffer(byte[] bytes) {
-    return factory.buffer(bytes);
+    return BufferImpl.buffer(bytes);
   }
 
   /**
@@ -113,7 +112,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    */
   @GenIgnore(GenIgnore.PERMITTED_TYPE)
   static Buffer buffer(ByteBuf byteBuf) {
-    return factory.buffer(byteBuf);
+    return BufferImpl.buffer(byteBuf);
   }
 
   /**
@@ -148,7 +147,7 @@ public interface Buffer extends ClusterSerializable, Shareable {
    * @return a JSON element which can be a {@link JsonArray}, {@link JsonObject}, {@link String}, ...etc if the buffer contains an array, object, string, ...etc
    */
   default Object toJson() {
-    return Json.decodeValue(this);
+    return Json.CODEC.fromBuffer(this, Object.class);
   }
 
   /**
@@ -708,8 +707,5 @@ public interface Buffer extends ClusterSerializable, Shareable {
    */
   @GenIgnore(GenIgnore.PERMITTED_TYPE)
   ByteBuf getByteBuf();
-
-  @GenIgnore
-  BufferFactory factory = ServiceHelper.loadFactory(BufferFactory.class);
 
 }

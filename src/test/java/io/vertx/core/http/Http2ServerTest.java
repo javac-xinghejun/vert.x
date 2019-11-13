@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -1441,19 +1441,25 @@ public class Http2ServerTest extends Http2TestBase {
       request.decoder.frameListener(new Http2EventAdapter() {
         Buffer buffer = Buffer.buffer();
         Http2Headers responseHeaders;
+        private void endStream() {
+          vertx.runOnContext(v -> {
+            assertEquals("" + length, responseHeaders.get("content-length").toString());
+            assertEquals(expected, buffer);
+            complete();
+          });
+        }
         @Override
         public void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers, int streamDependency, short weight, boolean exclusive, int padding, boolean endStream) throws Http2Exception {
           responseHeaders = headers;
+          if (endStream) {
+            endStream();
+          }
         }
         @Override
         public int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding, boolean endOfStream) throws Http2Exception {
           buffer.appendBuffer(Buffer.buffer(data.duplicate()));
           if (endOfStream) {
-            vertx.runOnContext(v -> {
-              assertEquals("" + length, responseHeaders.get("content-length").toString());
-              assertEquals(expected, buffer);
-              complete();
-            });
+            endStream();
           }
           return data.readableBytes() + padding;
         }
@@ -3053,8 +3059,8 @@ public class Http2ServerTest extends Http2TestBase {
     assertEquals(Http1xOrH2CHandler.HTTP_2_PREFACE, res.toString(StandardCharsets.UTF_8));
     assertNull(ch.pipeline().get(TestHttp1xOrH2CHandler.class));
   }
-  
-  
+
+
   @Test
   public void testStreamPriority() throws Exception {
     StreamPriority requestStreamPriority = new StreamPriority().setDependency(123).setWeight((short)45).setExclusive(true);
@@ -3177,7 +3183,7 @@ public class Http2ServerTest extends Http2TestBase {
             }
             return super.onDataRead(ctx, streamId, data, padding, endOfStream);
         }
-        
+
       });
     });
     fut.sync();
@@ -3245,8 +3251,8 @@ public class Http2ServerTest extends Http2TestBase {
             }
             return super.onDataRead(ctx, streamId, data, padding, endOfStream);
         }
-        
-        
+
+
       });
     });
     fut.sync();

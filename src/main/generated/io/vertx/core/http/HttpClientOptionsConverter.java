@@ -4,21 +4,13 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
-import io.vertx.core.spi.json.JsonCodec;
 
 /**
- * Converter and Codec for {@link io.vertx.core.http.HttpClientOptions}.
+ * Converter and mapper for {@link io.vertx.core.http.HttpClientOptions}.
  * NOTE: This class has been automatically generated from the {@link io.vertx.core.http.HttpClientOptions} original class using Vert.x codegen.
  */
-public class HttpClientOptionsConverter implements JsonCodec<HttpClientOptions, JsonObject> {
+public class HttpClientOptionsConverter {
 
-  public static final HttpClientOptionsConverter INSTANCE = new HttpClientOptionsConverter();
-
-  @Override public JsonObject encode(HttpClientOptions value) { return (value != null) ? value.toJson() : null; }
-
-  @Override public HttpClientOptions decode(JsonObject value) { return (value != null) ? new HttpClientOptions(value) : null; }
-
-  @Override public Class<HttpClientOptions> getTargetClass() { return HttpClientOptions.class; }
 
    static void fromJson(Iterable<java.util.Map.Entry<String, Object>> json, HttpClientOptions obj) {
     for (java.util.Map.Entry<String, Object> member : json) {

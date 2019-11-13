@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -721,6 +721,8 @@ public class MimeMapping {
     m.put("xlf", "application/x-xliff+xml");
     m.put("xpi", "application/x-xpinstall");
     m.put("xz", "application/x-xz");
+    m.put("yml", "application/x-yaml");
+    m.put("yaml", "application/x-yaml");
     m.put("z1", "application/x-zmachine");
     m.put("z2", "application/x-zmachine");
     m.put("z3", "application/x-zmachine");

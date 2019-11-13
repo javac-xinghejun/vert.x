@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -53,7 +53,9 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   static final Logger log = LoggerFactory.getLogger(HttpClientRequestImpl.class);
 
-  private final VertxInternal vertx;
+  private final ContextInternal context;
+  private final Promise<Void> endPromise;
+  private final Future<Void> endFuture;
   private boolean chunked;
   private String hostHeader;
   private String rawMethod;
@@ -62,8 +64,6 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   private Handler<HttpClientRequest> pushHandler;
   private Handler<HttpConnection> connectionHandler;
   private Handler<Throwable> exceptionHandler;
-  private Promise<Void> endPromise = Promise.promise();
-  private Future<Void> endFuture = endPromise.future();
   private boolean ended;
   private Throwable reset;
   private ByteBuf pendingChunks;
@@ -75,12 +75,14 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   public HttpClientStream stream;
   private boolean connecting;
 
-  HttpClientRequestImpl(HttpClientImpl client, boolean ssl, HttpMethod method, SocketAddress server,
+  HttpClientRequestImpl(HttpClientImpl client, ContextInternal context, boolean ssl, HttpMethod method, SocketAddress server,
                         String host, int port,
                         String relativeURI, VertxInternal vertx) {
-    super(client, ssl, method, server, host, port, relativeURI);
+    super(client, context, ssl, method, server, host, port, relativeURI);
     this.chunked = false;
-    this.vertx = vertx;
+    this.context = context;
+    this.endPromise = context.promise();
+    this.endFuture = endPromise.future();
     this.priority = HttpUtils.DEFAULT_STREAM_PRIORITY;
   }
 
@@ -106,41 +108,35 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   }
 
   @Override
-  public HttpClientRequest setFollowRedirects(boolean followRedirects) {
-    synchronized (this) {
-      checkEnded();
-      if (followRedirects) {
-        this.followRedirects = client.getOptions().getMaxRedirects() - 1;
-      } else {
-        this.followRedirects = 0;
-      }
-      return this;
+  public synchronized HttpClientRequest setFollowRedirects(boolean followRedirects) {
+    checkEnded();
+    if (followRedirects) {
+      this.followRedirects = client.getOptions().getMaxRedirects() - 1;
+    } else {
+      this.followRedirects = 0;
     }
+    return this;
   }
 
   @Override
-  public HttpClientRequest setMaxRedirects(int maxRedirects) {
+  public synchronized HttpClientRequest setMaxRedirects(int maxRedirects) {
     Arguments.require(maxRedirects >= 0, "Max redirects must be >= 0");
-    synchronized (this) {
-      checkEnded();
-      followRedirects = maxRedirects;
-      return this;
-    }
+    checkEnded();
+    followRedirects = maxRedirects;
+    return this;
   }
 
   @Override
-  public HttpClientRequestImpl setChunked(boolean chunked) {
-    synchronized (this) {
-      checkEnded();
-      if (stream != null) {
-        throw new IllegalStateException("Cannot set chunked after data has been written on request");
-      }
-      // HTTP 1.0 does not support chunking so we ignore this if HTTP 1.0
-      if (client.getOptions().getProtocolVersion() != io.vertx.core.http.HttpVersion.HTTP_1_0) {
-        this.chunked = chunked;
-      }
-      return this;
+  public synchronized HttpClientRequestImpl setChunked(boolean chunked) {
+    checkEnded();
+    if (stream != null) {
+      throw new IllegalStateException("Cannot set chunked after data has been written on request");
     }
+    // HTTP 1.0 does not support chunking so we ignore this if HTTP 1.0
+    if (client.getOptions().getProtocolVersion() != io.vertx.core.http.HttpVersion.HTTP_1_0) {
+      this.chunked = chunked;
+    }
+    return this;
   }
 
   @Override
@@ -193,30 +189,27 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   }
 
   @Override
-  public HttpClientRequest setWriteQueueMaxSize(int maxSize) {
-    HttpClientStream s;
-    synchronized (this) {
-      checkEnded();
-      if ((s = stream) == null) {
-        pendingMaxSize = maxSize;
-        return this;
-      }
+  public synchronized HttpClientRequest setWriteQueueMaxSize(int maxSize) {
+    checkEnded();
+    if (stream == null) {
+      pendingMaxSize = maxSize;
+    } else {
+      stream.doSetWriteQueueMaxSize(maxSize);
     }
-    s.doSetWriteQueueMaxSize(maxSize);
     return this;
   }
 
   @Override
-  public boolean writeQueueFull() {
-    HttpClientStream s;
+  public synchronized boolean writeQueueFull() {
+    checkEnded();
     synchronized (this) {
       checkEnded();
-      if ((s = stream) == null) {
+      if (stream == null) {
         // Should actually check with max queue size and not always blindly return false
         return false;
       }
     }
-    return s.isNotWritable();
+    return stream.isNotWritable();
   }
 
   private synchronized Handler<Throwable> exceptionHandler() {
@@ -234,27 +227,22 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   }
 
   @Override
-  public HttpClientRequest drainHandler(Handler<Void> handler) {
-    synchronized (this) {
-      if (handler != null) {
-        checkEnded();
-        drainHandler = handler;
-        HttpClientStream s;
-        if ((s = stream) == null) {
-          return this;
-        }
-        s.getContext().runOnContext(v -> {
-          synchronized (HttpClientRequestImpl.this) {
-            if (!stream.isNotWritable()) {
-              handleDrained();
-            }
-          }
-        });
-      } else {
-        drainHandler = null;
+  public synchronized HttpClientRequest drainHandler(Handler<Void> handler) {
+    if (handler != null) {
+      checkEnded();
+      drainHandler = handler;
+      if (stream == null) {
+        return this;
       }
-      return this;
+      stream.getContext().runOnContext(v -> {
+        if (!stream.isNotWritable()) {
+          handleDrained();
+        }
+      });
+    } else {
+      drainHandler = null;
     }
+    return this;
   }
 
   @Override
@@ -326,14 +314,8 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   }
 
   @Override
-  public HttpConnection connection() {
-    HttpClientStream s;
-    synchronized (this) {
-      if ((s = stream) == null) {
-        return null;
-      }
-    }
-    return s.connection();
+  public synchronized HttpConnection connection() {
+    return stream == null ? null : stream.connection();
   }
 
   @Override
@@ -343,7 +325,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
   }
 
   @Override
-  public synchronized HttpClientRequest writeCustomFrame(int type, int flags, Buffer payload) {
+  public HttpClientRequest writeCustomFrame(int type, int flags, Buffer payload) {
     HttpClientStream s;
     synchronized (this) {
       checkEnded();
@@ -434,7 +416,11 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
           peerAddress = SocketAddress.inetSocketAddress(80, hostHeader);
         }
       } else {
-        peerAddress = SocketAddress.inetSocketAddress(port, host);
+        String peerHost = host;
+        if (peerHost.endsWith(".")) {
+          peerHost = peerHost.substring(0, peerHost.length() -  1);
+        }
+        peerAddress = SocketAddress.inetSocketAddress(port, peerHost);
       }
 
       // Capture some stuff
@@ -453,20 +439,17 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
       } else {
         initializer = h2;
       }
-      ContextInternal connectCtx = vertx.getOrCreateContext();
-
-
 
       // We defer actual connection until the first part of body is written or end is called
       // This gives the user an opportunity to set an exception handler before connecting so
       // they can capture any exceptions on connection
       connecting = true;
-      client.getConnectionForRequest(connectCtx, peerAddress, ssl, server, ar1 -> {
+      client.getConnectionForRequest(context, peerAddress, ssl, server, ar1 -> {
         if (ar1.succeeded()) {
           HttpClientStream stream = ar1.result();
           ContextInternal ctx = stream.getContext();
           if (stream.id() == 1 && initializer != null) {
-            ctx.executeFromIO(v -> {
+            ctx.emitFromIO(v -> {
               initializer.handle(stream.connection());
             });
           }
@@ -525,7 +508,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> end(String chunk) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     end(chunk, promise);
     return promise.future();
   }
@@ -537,7 +520,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> end(String chunk, String enc) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     end(chunk, enc, promise);
     return promise.future();
   }
@@ -550,7 +533,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> end(Buffer chunk) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(chunk.getByteBuf(), true, promise);
     return promise.future();
   }
@@ -562,7 +545,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> end() {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     end(promise);
     return promise.future();
   }
@@ -574,7 +557,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> write(Buffer chunk) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(chunk, promise);
     return promise.future();
   }
@@ -587,7 +570,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> write(String chunk) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(chunk, promise);
     return promise.future();
   }
@@ -599,7 +582,7 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public Future<Void> write(String chunk, String enc) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(chunk, enc, promise);
     return promise.future();
   }
@@ -686,12 +669,10 @@ public class HttpClientRequestImpl extends HttpClientRequestBase implements Http
 
   @Override
   public synchronized HttpClientRequest setStreamPriority(StreamPriority priority) {
-    synchronized (this) {
-      if (stream != null) {
-        stream.updatePriority(priority);
-      } else {
-        this.priority = priority;
-      }
+    if (stream != null) {
+      stream.updatePriority(priority);
+    } else {
+      this.priority = priority;
     }
     return this;
   }

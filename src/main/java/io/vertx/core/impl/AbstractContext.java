@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -14,6 +14,7 @@ import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.concurrent.FastThreadLocalThread;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Starter;
@@ -34,8 +35,8 @@ import static io.vertx.core.impl.VertxThread.DISABLE_TCCL;
  */
 abstract class AbstractContext implements ContextInternal {
 
-  private static final String THREAD_CHECKS_PROP_NAME = "vertx.threadChecks";
-  private static final boolean THREAD_CHECKS = Boolean.getBoolean(THREAD_CHECKS_PROP_NAME);
+  static final String THREAD_CHECKS_PROP_NAME = "vertx.threadChecks";
+  static final boolean THREAD_CHECKS = Boolean.getBoolean(THREAD_CHECKS_PROP_NAME);
 
   static Context context() {
     Thread current = Thread.currentThread();
@@ -78,9 +79,13 @@ abstract class AbstractContext implements ContextInternal {
     }
   };
 
-  abstract void executeAsync(Handler<Void> task);
-
-  abstract <T> void execute(T value, Handler<T> task);
+  /**
+   * Execute the {@code task} on the context.
+   *
+   * @param argument the argument for the {@code task}
+   * @param task the task to execute with the provided {@code argument}
+   */
+  abstract <T> void execute(T argument, Handler<T> task);
 
   @Override
   public abstract boolean isEventLoopContext();
@@ -94,8 +99,8 @@ abstract class AbstractContext implements ContextInternal {
   // In such a case we should already be on an event loop thread (as Netty manages the event loops)
   // but check this anyway, then execute directly
   @Override
-  public final void executeFromIO(Handler<Void> task) {
-    executeFromIO(null, task);
+  public final void emitFromIO(Handler<Void> handler) {
+    emitFromIO(null, handler);
   }
 
   @Override
@@ -104,8 +109,8 @@ abstract class AbstractContext implements ContextInternal {
   }
 
   @Override
-  public final void dispatch(Handler<Void> task) {
-    dispatch(null, task);
+  public final void dispatch(Handler<Void> handler) {
+    dispatch(null, handler);
   }
 
   public final ContextInternal beginDispatch() {
@@ -172,10 +177,10 @@ abstract class AbstractContext implements ContextInternal {
   }
 
   @Override
-  public final <T> void dispatch(T arg, Handler<T> task) {
+  public final <T> void dispatch(T event, Handler<T> handler) {
     ContextInternal prev = beginDispatch();
     try {
-      task.handle(arg);
+      handler.handle(event);
     } catch (Throwable t) {
       reportException(t);
     } finally {
@@ -183,15 +188,18 @@ abstract class AbstractContext implements ContextInternal {
     }
   }
 
-  @Override
-  public final <T> void executeFromIO(T value, Handler<T> task) {
-    if (THREAD_CHECKS) {
-      checkEventLoopThread();
+  public final void dispatch(Runnable handler) {
+    ContextInternal prev = beginDispatch();
+    try {
+      handler.run();
+    } catch (Throwable t) {
+      reportException(t);
+    } finally {
+      endDispatch(prev);
     }
-    execute(value, task);
   }
 
-  private void checkEventLoopThread() {
+  static void checkEventLoopThread() {
     Thread current = Thread.currentThread();
     if (!(current instanceof FastThreadLocalThread)) {
       throw new IllegalStateException("Expected to be on Vert.x thread, but actually on: " + current);
@@ -202,9 +210,9 @@ abstract class AbstractContext implements ContextInternal {
 
   // Run the task asynchronously on this same context
   @Override
-  public final void runOnContext(Handler<Void> task) {
+  public final void runOnContext(Handler<Void> handler) {
     try {
-      executeAsync(task);
+      execute(null, handler);
     } catch (RejectedExecutionException ignore) {
       // Pool is already shut down
     }
@@ -218,8 +226,66 @@ abstract class AbstractContext implements ContextInternal {
   }
 
   @Override
+  public final <T> void executeBlockingInternal(Handler<Promise<T>> action, Handler<AsyncResult<T>> resultHandler) {
+    Future<T> fut = executeBlockingInternal(action);
+    setResultHandler(this, fut, resultHandler);
+  }
+
+  @Override
+  public <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> resultHandler) {
+    Future<T> fut = executeBlocking(blockingCodeHandler, ordered);
+    setResultHandler(this, fut, resultHandler);
+  }
+
+  @Override
+  public <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, TaskQueue queue, Handler<AsyncResult<T>> resultHandler) {
+    Future<T> fut = executeBlocking(blockingCodeHandler, queue);
+    setResultHandler(this, fut, resultHandler);
+  }
+
+  @Override
   public final <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, Handler<AsyncResult<T>> resultHandler) {
     executeBlocking(blockingCodeHandler, true, resultHandler);
+  }
+
+  public <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler) {
+    return executeBlocking(blockingCodeHandler, true);
+  }
+
+  @Override
+  public <T> PromiseInternal<T> promise() {
+    return Future.factory.promise(this);
+  }
+
+  @Override
+  public <T> PromiseInternal<T> promise(Handler<AsyncResult<T>> handler) {
+    if (handler instanceof PromiseInternal) {
+      return (PromiseInternal<T>) handler;
+    } else {
+      PromiseInternal<T> promise = promise();
+      promise.future().setHandler(handler);
+      return promise;
+    }
+  }
+
+  @Override
+  public <T> Future<T> succeededFuture() {
+    return Future.factory.succeededFuture(this);
+  }
+
+  @Override
+  public <T> Future<T> succeededFuture(T result) {
+    return Future.factory.succeededFuture(this, result);
+  }
+
+  @Override
+  public <T> Future<T> failedFuture(Throwable failure) {
+    return Future.factory.failedFuture(this, failure);
+  }
+
+  @Override
+  public <T> Future<T> failedFuture(String message) {
+    return Future.factory.failedFuture(this, message);
   }
 
   @Override
@@ -257,5 +323,17 @@ abstract class AbstractContext implements ContextInternal {
   @Override
   public final boolean removeLocal(String key) {
     return localContextData().remove(key) != null;
+  }
+
+  static <T> void setResultHandler(ContextInternal ctx, Future<T> fut, Handler<AsyncResult<T>> resultHandler) {
+    if (resultHandler != null) {
+      fut.setHandler(resultHandler);
+    } else {
+      fut.setHandler(ar -> {
+        if (ar.failed()) {
+          ctx.reportException(ar.cause());
+        }
+      });
+    }
   }
 }

@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * http://www.eclipse.org/legal/epl-2.0, or the Apache License, Version 2.0
+ * which is available at https://www.apache.org/licenses/LICENSE-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
+ */
+
 package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
@@ -8,6 +19,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http2.*;
+import io.vertx.core.http.HttpServerOptions;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.vertx.core.Handler;
@@ -26,10 +38,14 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
   private final HttpServerChannelInitializer initializer;
   private final HandlerHolder<? extends Handler<HttpServerConnection>> holder;
   private VertxHttp2ConnectionHandler<Http2ServerConnection> handler;
+  private final boolean isCompressionSupported;
+  private final boolean isDecompressionSupported;
 
-  Http1xUpgradeToH2CHandler(HttpServerChannelInitializer initializer, HandlerHolder<? extends Handler<HttpServerConnection>> holder) {
+  Http1xUpgradeToH2CHandler(HttpServerChannelInitializer initializer, HandlerHolder<? extends Handler<HttpServerConnection>> holder, boolean isCompressionSupported, boolean isDecompressionSupported) {
     this.initializer = initializer;
     this.holder = holder;
+    this.isCompressionSupported = isCompressionSupported;
+    this.isDecompressionSupported = isDecompressionSupported;
   }
 
   @Override
@@ -68,9 +84,14 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
                 DefaultFullHttpResponse res = new DefaultFullHttpResponse(HTTP_1_1, SWITCHING_PROTOCOLS, Unpooled.EMPTY_BUFFER, false);
                 res.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
                 res.headers().add(HttpHeaderNames.UPGRADE, Http2CodecUtil.HTTP_UPGRADE_PROTOCOL_NAME);
-                res.headers().add(HttpHeaderNames.CONTENT_LENGTH, HttpHeaderValues.ZERO);
                 ctx.writeAndFlush(res);
                 pipeline.remove("httpEncoder");
+                if(isCompressionSupported) {
+                  pipeline.remove("deflater");
+                }
+                if(isDecompressionSupported) {
+                  pipeline.remove("inflater");
+                }
                 handler = initializer.buildHttp2ConnectionHandler(holder.context, holder.handler);
                 pipeline.addLast("handler", handler);
                 handler.serverUpgrade(ctx, settings, request);

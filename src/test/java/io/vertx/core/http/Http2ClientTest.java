@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -428,34 +428,38 @@ public class Http2ClientTest extends Http2TestBase {
       });
     });
     startServer();
-    HttpClientRequest req = client.post(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", resp -> {
-      testComplete();
-    }).setChunked(true).exceptionHandler(err -> {
-      fail();
-    });
-    AtomicInteger sent = new AtomicInteger();
-    AtomicInteger count = new AtomicInteger();
-    AtomicInteger drained = new AtomicInteger();
-    vertx.setPeriodic(1, timerID -> {
-      Context ctx = vertx.getOrCreateContext();
-      if (req.writeQueueFull()) {
-        assertTrue(paused.get());
-        assertEquals(1, numPause.get());
-        req.drainHandler(v -> {
-          assertOnIOContext(ctx);
-          assertEquals(0, drained.getAndIncrement());
+    Context ctx = vertx.getOrCreateContext();
+    client.close();
+    ctx.runOnContext(v -> {
+      client = vertx.createHttpClient(createBaseClientOptions());
+      HttpClientRequest req = client.post(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", resp -> {
+        testComplete();
+      }).setChunked(true).exceptionHandler(err -> {
+        fail();
+      });
+      AtomicInteger sent = new AtomicInteger();
+      AtomicInteger count = new AtomicInteger();
+      AtomicInteger drained = new AtomicInteger();
+      vertx.setPeriodic(1, timerID -> {
+        if (req.writeQueueFull()) {
+          assertTrue(paused.get());
           assertEquals(1, numPause.get());
-          assertFalse(paused.get());
-          req.end();
-        });
-        vertx.cancelTimer(timerID);
-        done.complete(null);
-      } else {
-        count.incrementAndGet();
-        expected.appendString(chunk);
-        req.write(chunk);
-        sent.addAndGet(chunk.length());
-      }
+          req.drainHandler(v2 -> {
+            assertOnIOContext(ctx);
+            assertEquals(0, drained.getAndIncrement());
+            assertEquals(1, numPause.get());
+            assertFalse(paused.get());
+            req.end();
+          });
+          vertx.cancelTimer(timerID);
+          done.complete(null);
+        } else {
+          count.incrementAndGet();
+          expected.appendString(chunk);
+          req.write(chunk);
+          sent.addAndGet(chunk.length());
+        }
+      });
     });
     await();
   }
@@ -657,7 +661,9 @@ public class Http2ClientTest extends Http2TestBase {
       assertEquals(8, reset.getCode());
       complete();
     };
+    client.close();
     ctx.runOnContext(v -> {
+      client = vertx.createHttpClient(createBaseClientOptions());
       client.post(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", onSuccess(resp -> {
         resp.exceptionHandler(resetHandler);
         resp.handler(buff -> {
@@ -1129,8 +1135,10 @@ public class Http2ClientTest extends Http2TestBase {
     });
     ChannelFuture s = bootstrap.bind(DEFAULT_HTTPS_HOST, DEFAULT_HTTPS_PORT).sync();
     try {
+      client.close();
       Context ctx = vertx.getOrCreateContext();
       ctx.runOnContext(v -> {
+        client = vertx.createHttpClient(createBaseClientOptions());
         client.get(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", onSuccess(resp -> {
           resp.exceptionHandler(err -> {
             assertOnIOContext(ctx);
@@ -1172,7 +1180,9 @@ public class Http2ClientTest extends Http2TestBase {
     ChannelFuture s = bootstrap.bind(DEFAULT_HTTPS_HOST, DEFAULT_HTTPS_PORT).sync();
     try {
       Context ctx = vertx.getOrCreateContext();
+      client.close();
       ctx.runOnContext(v -> {
+        client = vertx.createHttpClient(createBaseClientOptions());
         client.get(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", onSuccess(resp -> {
           resp.exceptionHandler(err -> {
             assertOnIOContext(ctx);
@@ -1212,7 +1222,9 @@ public class Http2ClientTest extends Http2TestBase {
     ChannelFuture s = bootstrap.bind(DEFAULT_HTTPS_HOST, DEFAULT_HTTPS_PORT).sync();
     try {
       Context ctx = vertx.getOrCreateContext();
+      client.close();
       ctx.runOnContext(v -> {
+        client = vertx.createHttpClient(createBaseClientOptions());
         client.get(DEFAULT_HTTPS_PORT, DEFAULT_HTTPS_HOST, "/somepath", onFailure(err -> {
           assertOnIOContext(ctx);
           if (err instanceof NumberFormatException) {
@@ -1581,9 +1593,9 @@ public class Http2ClientTest extends Http2TestBase {
     });
     startServer();
     client.close();
-    client = vertx.createHttpClient(clientOptions.setIdleTimeout(2));
     Context ctx = vertx.getOrCreateContext();
     ctx.runOnContext(v1 -> {
+      client = vertx.createHttpClient(clientOptions.setIdleTimeout(2));
       HttpClientRequest req = client.get("/somepath", onSuccess(resp -> {
         resp.exceptionHandler(err -> {
           assertOnIOContext(ctx);
@@ -1887,8 +1899,8 @@ public class Http2ClientTest extends Http2TestBase {
 
     await();
   }
-  
-  
+
+
   @Test
   public void testStreamPriority() throws Exception {
     StreamPriority requestStreamPriority = new StreamPriority().setDependency(123).setWeight((short)45).setExclusive(true);
@@ -1968,7 +1980,7 @@ public class Http2ClientTest extends Http2TestBase {
           }
           return super.onDataRead(ctx, streamId, data, padding, endOfStream);
       }
-      
+
     });
     ChannelFuture s = bootstrap.bind(DEFAULT_HTTPS_HOST, DEFAULT_HTTPS_PORT).sync();
     try {
@@ -2035,7 +2047,7 @@ public class Http2ClientTest extends Http2TestBase {
           }
           return super.onDataRead(ctx, streamId, data, padding, endOfStream);
       }
-      
+
     });
     ChannelFuture s = bootstrap.bind(DEFAULT_HTTPS_HOST, DEFAULT_HTTPS_PORT).sync();
     try {
@@ -2063,5 +2075,5 @@ public class Http2ClientTest extends Http2TestBase {
     }
   }
 
-  
+
 }

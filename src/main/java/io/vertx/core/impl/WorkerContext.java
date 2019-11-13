@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -26,8 +26,13 @@ class WorkerContext extends ContextImpl {
   }
 
   @Override
-  void executeAsync(Handler<Void> task) {
-    execute(null, task);
+  <T> void execute(T argument, Handler<T> task) {
+    execute(this, argument, task);
+  }
+
+  @Override
+  public void execute(Runnable task) {
+    execute(this, task);
   }
 
   @Override
@@ -38,8 +43,44 @@ class WorkerContext extends ContextImpl {
   // In the case of a worker context, the IO will always be provided on an event loop thread, not a worker thread
   // so we need to execute it on the worker thread
   @Override
-  <T> void execute(T value, Handler<T> task) {
-    execute(this, value ,task);
+  public <T> void emitFromIO(T event, Handler<T> handler) {
+    if (THREAD_CHECKS) {
+      checkEventLoopThread();
+    }
+    execute(this, event, handler);
+  }
+
+  @Override
+  public <T> void emit(T event, Handler<T> handler) {
+    emit(this, event, handler);
+  }
+
+  private static <T> void emit(AbstractContext ctx, T value, Handler<T> task) {
+    if (AbstractContext.context() == ctx) {
+      ctx.dispatch(value, task);
+    } else if (ctx.nettyEventLoop().inEventLoop()) {
+      ctx.emitFromIO(value, task);
+    } else {
+      ctx.execute(value, task);
+    }
+  }
+
+  private <T> void execute(ContextInternal ctx, Runnable task) {
+    PoolMetrics metrics = workerPool.metrics();
+    Object queueMetric = metrics != null ? metrics.submitted() : null;
+    orderedTasks.execute(() -> {
+      Object execMetric = null;
+      if (metrics != null) {
+        execMetric = metrics.begin(queueMetric);
+      }
+      try {
+        ctx.dispatch(task);
+      } finally {
+        if (metrics != null) {
+          metrics.end(execMetric, true);
+        }
+      }
+    }, workerPool.executor());
   }
 
   private <T> void execute(ContextInternal ctx, T value, Handler<T> task) {
@@ -88,13 +129,24 @@ class WorkerContext extends ContextImpl {
       super(delegate, other);
     }
 
-    void executeAsync(Handler<Void> task) {
-      execute(null, task);
+    @Override
+    <T> void execute(T argument, Handler<T> task) {
+      delegate.execute(this, argument, task);
     }
 
     @Override
-    <T> void execute(T value, Handler<T> task) {
-      delegate.execute(this, value, task);
+    public void execute(Runnable task) {
+      delegate.execute(this, task);
+    }
+
+    @Override
+    public <T> void emitFromIO(T event, Handler<T> handler) {
+      execute(event, handler);
+    }
+
+    @Override
+    public <T> void emit(T event, Handler<T> handler) {
+      delegate.emit(this, event, handler);
     }
 
     @Override

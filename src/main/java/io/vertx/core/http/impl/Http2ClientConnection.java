@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -22,6 +22,7 @@ import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2Exception;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Stream;
+import io.netty.util.concurrent.FutureListener;
 import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
@@ -113,19 +114,18 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
 
   @Override
   public void createStream(ContextInternal context, Handler<AsyncResult<HttpClientStream>> completionHandler) {
-    ContextInternal sub = getContext().duplicate(context);
     Future<HttpClientStream> fut;
     synchronized (this) {
       Http2Connection conn = handler.connection();
       try {
         int id = conn.local().lastStreamCreated() == 0 ? 1 : conn.local().lastStreamCreated() + 2;
-        Http2ClientStream stream = createStream(sub, conn.local().createStream(id, false));
+        Http2ClientStream stream = createStream(context, conn.local().createStream(id, false));
         fut = Future.succeededFuture(stream);
       } catch (Exception e) {
         fut = Future.failedFuture(e);
       }
     }
-    sub.dispatch(fut, completionHandler);
+    context.dispatch(fut, completionHandler);
   }
 
   private Http2ClientStream createStream(ContextInternal context, Http2Stream stream) {
@@ -319,7 +319,7 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
       response.handleUnknownFrame(new HttpFrameImpl(type, flags, buff));
     }
 
-    
+
     @Override
     void handlePriorityChange(StreamPriority streamPriority) {
       if(streamPriority != null && !streamPriority.equals(priority())) {
@@ -428,18 +428,18 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
     }
 
     @Override
-    public void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> handler) {
+    public void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> listener) {
       if (buf == null && end) {
         buf = Unpooled.EMPTY_BUFFER;
       }
       if (buf != null) {
-        writeData(buf, end, handler);
+        writeData(buf, end, listener);
       }
       if (end) {
         handlerContext.flush();
       }
     }
-    
+
     @Override
     public void writeFrame(int type, int flags, ByteBuf payload) {
       super.writeFrame(type, flags, payload);
@@ -543,7 +543,7 @@ class Http2ClientConnection extends Http2ConnectionBase implements HttpClientCon
         if (m == null)  {
           m = metrics.connected(conn.remoteAddress(), conn.remoteName());
           metrics.endpointConnected(queueMetric, m);
-        } 
+        }
         conn.metric(m);
       }
       long concurrency = conn.remoteSettings().getMaxConcurrentStreams();

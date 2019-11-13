@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -13,6 +13,8 @@ package io.vertx.core.impl;
 
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
+import io.netty.util.concurrent.FutureListener;
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.*;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -29,7 +31,7 @@ import java.util.concurrent.RejectedExecutionException;
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 abstract class ContextImpl extends AbstractContext {
-
+  
   /**
    * Execute the {@code task} disabling the thread-local association for the duration
    * of the execution. {@link Vertx#currentContext()} will return {@code null},
@@ -138,50 +140,42 @@ abstract class ContextImpl extends AbstractContext {
   }
 
   @Override
-  public <T> void executeBlockingInternal(Handler<Promise<T>> action, Handler<AsyncResult<T>> resultHandler) {
-    executeBlocking(this, action, resultHandler, internalBlockingPool, internalOrderedTasks);
+  public <T> Future<T> executeBlockingInternal(Handler<Promise<T>> action) {
+    return executeBlocking(this, action, internalBlockingPool, internalOrderedTasks);
   }
 
   @Override
-  public <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> resultHandler) {
-    executeBlocking(this, blockingCodeHandler, resultHandler, workerPool, ordered ? orderedTasks : null);
+  public <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
+    return executeBlocking(this, blockingCodeHandler, workerPool, ordered ? orderedTasks : null);
   }
 
   @Override
-  public <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, TaskQueue queue, Handler<AsyncResult<T>> resultHandler) {
-    executeBlocking(this, blockingCodeHandler, resultHandler, workerPool, queue);
+  public <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, TaskQueue queue) {
+    return executeBlocking(this, blockingCodeHandler, workerPool, queue);
   }
 
-  static <T> void executeBlocking(ContextInternal context, Handler<Promise<T>> blockingCodeHandler,
-      Handler<AsyncResult<T>> resultHandler,
+  static <T> Future<T> executeBlocking(ContextInternal context, Handler<Promise<T>> blockingCodeHandler,
       WorkerPool workerPool, TaskQueue queue) {
     PoolMetrics metrics = workerPool.metrics();
     Object queueMetric = metrics != null ? metrics.submitted() : null;
+    Promise<T> promise = context.promise();
+    Future<T> fut = promise.future();
     try {
       Runnable command = () -> {
         Object execMetric = null;
         if (metrics != null) {
           execMetric = metrics.begin(queueMetric);
         }
-        Promise<T> res = Promise.promise();
-        Future<T> fut = res.future();
-        context.dispatch(res, f -> {
+        context.dispatch(promise, f -> {
           try {
-            blockingCodeHandler.handle(res);
+            blockingCodeHandler.handle(promise);
           } catch (Throwable e) {
-            res.tryFail(e);
+            promise.tryFail(e);
           }
         });
         if (metrics != null) {
           metrics.end(execMetric, fut.succeeded());
         }
-        fut.setHandler(ar -> {
-          if (resultHandler != null) {
-            context.runOnContext(v -> resultHandler.handle(ar));
-          } else if (ar.failed()) {
-            context.reportException(ar.cause());
-          }
-        });
       };
       Executor exec = workerPool.executor();
       if (queue != null) {
@@ -196,6 +190,7 @@ abstract class ContextImpl extends AbstractContext {
       }
       throw e;
     }
+    return fut;
   }
 
   @Override
@@ -276,18 +271,19 @@ abstract class ContextImpl extends AbstractContext {
       return delegate.tracer();
     }
 
-    public final <T> void executeBlockingInternal(Handler<Promise<T>> action, Handler<AsyncResult<T>> resultHandler) {
-      ContextImpl.executeBlocking(this, action, resultHandler, delegate.internalBlockingPool, delegate.internalOrderedTasks);
+    @Override
+    public final <T> Future<T> executeBlockingInternal(Handler<Promise<T>> action) {
+      return ContextImpl.executeBlocking(this, action, delegate.internalBlockingPool, delegate.internalOrderedTasks);
     }
 
     @Override
-    public final <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> resultHandler) {
-      ContextImpl.executeBlocking(this, blockingCodeHandler, resultHandler, delegate.workerPool, ordered ? delegate.orderedTasks : null);
+    public <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
+      return ContextImpl.executeBlocking(this, blockingCodeHandler, delegate.workerPool, ordered ? delegate.orderedTasks : null);
     }
 
     @Override
-    public final <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, TaskQueue queue, Handler<AsyncResult<T>> resultHandler) {
-      ContextImpl.executeBlocking(this, blockingCodeHandler, resultHandler, delegate.workerPool, queue);
+    public <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, TaskQueue queue) {
+      return ContextImpl.executeBlocking(this, blockingCodeHandler, delegate.workerPool, queue);
     }
 
     @Override

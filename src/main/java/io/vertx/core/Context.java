@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -76,7 +76,7 @@ public interface Context {
    * NOTE! This is not always the same as calling {@link Context#isEventLoopContext}. If you are running blocking code
    * from an event loop context, then this will return false but {@link Context#isEventLoopContext} will return true.
    *
-   * @return true if current thread is a worker thread, false otherwise
+   * @return true if current thread is an event thread, false otherwise
    */
   static boolean isOnEventLoopThread() {
     Thread t = Thread.currentThread();
@@ -140,20 +140,12 @@ public interface Context {
   /**
    * Same as {@link #executeBlocking(Handler, boolean, Handler)} but with an {@code handler} called when the operation completes
    */
-  default <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
-    Promise<T> promise = Promise.promise();
-    executeBlocking(blockingCodeHandler, ordered, promise);
-    return promise.future();
-  }
+  <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered);
 
   /**
    * Same as {@link #executeBlocking(Handler, Handler)} but with an {@code handler} called when the operation completes
    */
-  default <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler) {
-    Promise<T> promise = Promise.promise();
-    executeBlocking(blockingCodeHandler, promise);
-    return promise.future();
-  }
+  <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler);
 
   /**
    * If the context is associated with a Verticle deployment, this returns the deployment ID of that deployment.

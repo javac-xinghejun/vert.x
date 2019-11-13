@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -19,13 +19,12 @@ import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpVersion;
 import io.vertx.core.*;
-import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.http.*;
 import io.vertx.core.impl.ConcurrentHashSet;
-import io.vertx.core.impl.NetSocketInternal;
+import io.vertx.core.net.impl.NetSocketInternal;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.impl.logging.Logger;
@@ -1229,6 +1228,21 @@ public class NetTest extends VertxTestBase {
   }
 
   @Test
+  public void testTLSTrailingDotHost() throws Exception {
+    // We just need a vanilla cert for this test
+    SelfSignedCertificate cert = SelfSignedCertificate.create("host2.com");
+    TLSTest test = new TLSTest()
+      .clientTrust(cert::trustOptions)
+      .connectAddress(SocketAddress.inetSocketAddress(4043, "host2.com."))
+      .bindAddress(SocketAddress.inetSocketAddress(4043, "host2.com"))
+      .serverCert(cert::keyCertOptions);
+    test.run(true);
+    await();
+    assertEquals("host2.com", cnOf(test.clientPeerCert()));
+    assertNull(test.indicatedServerName);
+  }
+
+  @Test
   // SNI without server name should use the first keystore entry
   public void testSniWithoutServerNameUsesTheFirstKeyStoreEntry1() throws Exception {
     TLSTest test = new TLSTest()
@@ -1391,6 +1405,19 @@ public class NetTest extends VertxTestBase {
     await();
   }
 
+  @Test
+  public void testSniWithTrailingDotHost() throws Exception {
+    TLSTest test = new TLSTest()
+      .clientTrust(Trust.SNI_JKS_HOST2)
+      .connectAddress(SocketAddress.inetSocketAddress(4043, "host2.com."))
+      .bindAddress(SocketAddress.inetSocketAddress(4043, "host2.com"))
+      .serverCert(Cert.SNI_JKS).sni(true);
+    test.run(true);
+    await();
+    assertEquals("host2.com", cnOf(test.clientPeerCert()));
+    assertEquals("host2.com", test.indicatedServerName);
+  }
+
   void testTLS(Cert<?> clientCert, Trust<?> clientTrust,
                Cert<?> serverCert, Trust<?> serverTrust,
     boolean requireClientAuth, boolean clientTrustAll,
@@ -1440,7 +1467,8 @@ public class NetTest extends VertxTestBase {
     String[] enabledCipherSuites = new String[0];
     String[] enabledSecureTransportProtocols = new String[0];
     boolean sni;
-    SocketAddress address = SocketAddress.inetSocketAddress(4043, "localhost");
+    SocketAddress bindAddress = SocketAddress.inetSocketAddress(4043, "localhost");
+    SocketAddress connectAddress = bindAddress;
     String serverName;
     X509Certificate clientPeerCert;
     String indicatedServerName;
@@ -1491,7 +1519,18 @@ public class NetTest extends VertxTestBase {
     }
 
     public TLSTest address(SocketAddress address) {
-      this.address = address;
+      this.bindAddress = address;
+      this.connectAddress = address;
+      return this;
+    }
+
+    public TLSTest bindAddress(SocketAddress address) {
+      this.bindAddress = address;
+      return this;
+    }
+
+    public TLSTest connectAddress(SocketAddress address) {
+      this.connectAddress = address;
       return this;
     }
 
@@ -1567,7 +1606,9 @@ public class NetTest extends VertxTestBase {
             if (upgradedServer.compareAndSet(false, true)) {
               indicatedServerName = socket.indicatedServerName();
               assertFalse(socket.isSsl());
+              Context ctx = Vertx.currentContext();
               socket.upgradeToSsl(ar -> {
+                assertSame(ctx, Vertx.currentContext());
                 assertEquals(shouldPass, ar.succeeded());
                 if (ar.succeeded()) {
                   certificateChainChecker.accept(socket);
@@ -1586,8 +1627,7 @@ public class NetTest extends VertxTestBase {
           }
         });
       };
-      server.connectHandler(serverHandler).listen(address, ar -> {
-        assertTrue(ar.succeeded());
+      server.connectHandler(serverHandler).listen(bindAddress, onSuccess(ar -> {
         client.close();
         NetClientOptions clientOptions = new NetClientOptions();
         if (!startTLS) {
@@ -1608,7 +1648,7 @@ public class NetTest extends VertxTestBase {
           clientOptions.addEnabledSecureTransportProtocol(protocol);
         }
         client = vertx.createNetClient(clientOptions);
-        client.connect(address, serverName, ar2 -> {
+        client.connect(connectAddress, serverName, ar2 -> {
           if (ar2.succeeded()) {
             if (!startTLS && !shouldPass) {
               fail("Should not connect");
@@ -1676,13 +1716,14 @@ public class NetTest extends VertxTestBase {
             }
           } else {
             if (shouldPass) {
+              ar2.cause().printStackTrace();
               fail("Should not fail to connect");
             } else {
               complete();
             }
           }
         });
-      });
+      }));
     }
   }
 
@@ -3092,7 +3133,7 @@ public class NetTest extends VertxTestBase {
     String expected = TestUtils.randomAlphaString(2000);
     vertx.deployVerticle(new AbstractVerticle() {
       @Override
-      public void start(Promise<Void> startFuture) throws Exception {
+      public void start(Promise<Void> startPromise) throws Exception {
         NetServer server = vertx.createNetServer();
         server.connectHandler(so -> {
           Buffer received = Buffer.buffer();
@@ -3107,7 +3148,7 @@ public class NetTest extends VertxTestBase {
             Thread.currentThread().interrupt();
           }
         });
-        server.listen(testAddress, ar -> startFuture.handle(ar.mapEmpty()));
+        server.listen(testAddress, ar -> startPromise.handle(ar.mapEmpty()));
       }
     }, new DeploymentOptions().setWorker(true), onSuccess(v -> {
       client.connect(testAddress, onSuccess(so -> {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Red Hat, Inc. and others
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -174,6 +174,16 @@ public class HTTPExamples {
     request.uploadHandler(upload -> {
       upload.streamToFileSystem("myuploads_directory/" + upload.filename());
     });
+  }
+
+  public void exampleHandlingCookies(HttpServerRequest request) {
+    Cookie someCookie = request.getCookie("mycookie");
+    String cookieValue = someCookie.getValue();
+
+    // Do something with cookie...
+
+    // Add a cookie - this will get written back in the response automatically
+    request.response().addCookie(Cookie.cookie("othercookie", "somevalue"));
   }
 
   public void example16(HttpServerRequest request, Buffer buffer) {
@@ -732,8 +742,8 @@ public class HTTPExamples {
   public void exampleAsynchronousHandshake(HttpServer server) {
     server.websocketHandler(websocket -> {
       Promise<Integer> promise = Promise.promise();
-      websocket.setHandshake(promise);
-      authenticate(websocket, ar -> {
+      websocket.setHandshake(promise.future());
+      authenticate(websocket.headers(), ar -> {
         if (ar.succeeded()) {
           // Terminate the handshake with the status code 101 (Switching Protocol)
           // Reject the handshake with 401 (Unauthorized)
@@ -746,7 +756,7 @@ public class HTTPExamples {
     });
   }
 
-  private static void authenticate(ServerWebSocket ws, Handler<AsyncResult<Boolean>> handler) {
+  private static void authenticate(MultiMap headers, Handler<AsyncResult<Boolean>> handler) {
 
   }
 

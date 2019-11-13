@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -16,6 +16,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.resolver.AddressResolverGroup;
 import io.netty.util.ResourceLeakDetector;
 import io.netty.util.concurrent.GenericFutureListener;
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.Future;
 import io.vertx.core.*;
 import io.vertx.core.datagram.DatagramSocket;
@@ -528,7 +529,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
 
   @Override
   public Future<Void> close() {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = getOrCreateContext().promise();
     close(promise);
     return promise.future();
   }
@@ -560,7 +561,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     closed = true;
 
     closeHooks.run(ar -> {
-      deploymentManager.undeployAll(ar1 -> {
+      deploymentManager.undeployAll().setHandler(ar1 -> {
         HAManager haManager = haManager();
         Promise<Void> haPromise = Promise.promise();
         if (haManager != null) {
@@ -685,7 +686,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
         completionHandler.handle(Future.failedFuture("Vert.x closed"));
       }
     } else {
-      deploymentManager.deployVerticle(verticleSupplier, options, completionHandler);
+      deploymentManager.deployVerticle(verticleSupplier, options).setHandler(completionHandler);
     }
   }
 
@@ -708,7 +709,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     if (options.isHa() && haManager() != null && haManager().isEnabled()) {
       haManager().deployVerticle(name, options, completionHandler);
     } else {
-      deploymentManager.deployVerticle(name, options, completionHandler);
+      deploymentManager.deployVerticle(name, options).setHandler(completionHandler);
     }
   }
 
@@ -736,11 +737,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     } else {
       haFuture.complete();
     }
-    haFuture.future().compose(v -> {
-      Promise<Void> deploymentFuture = Promise.promise();
-      deploymentManager.undeployVerticle(deploymentID, deploymentFuture);
-      return deploymentFuture.future();
-    }).setHandler(completionHandler);
+    haFuture.future().compose(v -> deploymentManager.undeployVerticle(deploymentID)).setHandler(completionHandler);
   }
 
   @Override
@@ -768,6 +765,17 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     ContextInternal context = getOrCreateContext();
 
     context.executeBlockingInternal(blockingCodeHandler, resultHandler);
+  }
+
+  @Override
+  public <T> Future<@Nullable T> executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered) {
+    ContextInternal context = getOrCreateContext();
+    return context.executeBlocking(blockingCodeHandler, ordered);
+  }
+
+  @Override
+  public <T> Future<T> executeBlocking(Handler<Promise<T>> blockingCodeHandler) {
+    return executeBlocking(blockingCodeHandler, true);
   }
 
   @Override
@@ -939,7 +947,7 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
 
     @Override
     public void run() {
-      context.executeFromIO(this);
+      context.emitFromIO(this);
     }
 
     public void handle(Void v) {
@@ -963,11 +971,11 @@ public class VertxImpl implements VertxInternal, MetricsProvider {
     }
 
     // Called via Context close hook when Verticle is undeployed
-    public void close(Handler<AsyncResult<Void>> completionHandler) {
+    public void close(Promise<Void> completion) {
       if (timeouts.remove(timerID) != null) {
         future.cancel(false);
       }
-      completionHandler.handle(Future.succeededFuture());
+      completion.complete();
     }
   }
 

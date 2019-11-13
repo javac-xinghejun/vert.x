@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -16,6 +16,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http2.EmptyHttp2Headers;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Stream;
+import io.netty.util.concurrent.FutureListener;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
@@ -92,8 +93,8 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   void onWritabilityChanged() {
     synchronized (conn) {
       writable = !writable;
-      handleInterestedOpsChanged();
     }
+    handleInterestedOpsChanged();
   }
 
   void onEnd() {
@@ -138,7 +139,8 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   }
 
   void writeHeaders(Http2Headers headers, boolean end, Handler<AsyncResult<Void>> handler) {
-    conn.handler.writeHeaders(stream, headers, end, priority.getDependency(), priority.getWeight(), priority.isExclusive(), handler);
+    FutureListener<Void> promise = handler == null ? null : context.promise(handler);
+    conn.handler.writeHeaders(stream, headers, end, priority.getDependency(), priority.getWeight(), priority.isExclusive(), promise);
   }
 
   private void writePriorityFrame(StreamPriority priority) {
@@ -151,7 +153,8 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
 
   void writeData(ByteBuf chunk, boolean end, Handler<AsyncResult<Void>> handler) {
     bytesWritten += chunk.readableBytes();
-    conn.handler.writeData(stream, chunk, end, handler);
+    FutureListener<Void> promise = handler == null ? null : context.promise(handler);
+    conn.handler.writeData(stream, chunk, end, promise);
   }
 
   void writeReset(long code) {
@@ -179,7 +182,7 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   void handleClose() {
     conn.reportBytesWritten(bytesWritten);
   }
-  
+
   synchronized void priority(StreamPriority streamPriority) {
     this.priority = streamPriority;
   }
@@ -198,4 +201,5 @@ abstract class VertxHttp2Stream<C extends Http2ConnectionBase> {
   }
 
   abstract void handlePriorityChange(StreamPriority streamPriority);
+
 }

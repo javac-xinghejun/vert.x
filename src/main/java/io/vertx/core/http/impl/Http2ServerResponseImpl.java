@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -13,7 +13,6 @@ package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -28,6 +27,10 @@ import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.file.AsyncFile;
+import io.vertx.core.file.FileSystem;
+import io.vertx.core.file.OpenOptions;
+import io.vertx.core.http.Cookie;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
@@ -37,14 +40,14 @@ import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.impl.ConnectionBase;
-import io.vertx.core.spi.metrics.Metrics;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.util.Map;
 
-import static io.vertx.core.spi.metrics.Metrics.METRICS_ENABLED;
+import static io.vertx.core.http.HttpHeaders.SET_COOKIE;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -59,7 +62,7 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
   private final boolean head;
   private final boolean push;
   private final String host;
-  private Http2Headers headers = new DefaultHttp2Headers();
+  private final Http2Headers headers = new DefaultHttp2Headers();
   private Http2HeadersAdaptor headersMap;
   private Http2Headers trailers;
   private Http2HeadersAdaptor trailedMap;
@@ -67,6 +70,7 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
   private boolean headWritten;
   private boolean ended;
   private boolean closed;
+  private Map<String, ServerCookie> cookies;
   private HttpResponseStatus status = HttpResponseStatus.OK;
   private String statusMessage; // Not really used but we keep the message for the getStatusMessage()
   private Handler<Void> drainHandler;
@@ -333,7 +337,7 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
   @Override
   public Future<Void> write(Buffer chunk) {
     ByteBuf buf = chunk.getByteBuf();
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = stream.context.promise();
     write(buf, false, promise);
     return promise.future();
   }
@@ -346,8 +350,8 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
 
   @Override
   public Future<Void> write(String chunk, String enc) {
-    Promise<Void> promise = Promise.promise();
-    write(chunk, enc, promise);
+    Promise<Void> promise = stream.context.promise();
+    write(Buffer.buffer(chunk, enc).getByteBuf(), false, promise);
     return promise.future();
   }
 
@@ -358,8 +362,8 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
 
   @Override
   public Future<Void> write(String chunk) {
-    Promise<Void> promise = Promise.promise();
-    write(chunk, promise);
+    Promise<Void> promise = stream.context.promise();
+    write(Buffer.buffer(chunk).getByteBuf(), false, promise);
     return promise.future();
   }
 
@@ -395,9 +399,9 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
 
   @Override
   public Future<Void> end(Buffer chunk) {
-    Promise<Void> promose = Promise.promise();
-    end(chunk, promose);
-    return promose.future();
+    Promise<Void> promise = stream.context.promise();
+    write(chunk.getByteBuf(), true, promise);
+    return promise.future();
   }
 
   @Override
@@ -407,8 +411,8 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
 
   @Override
   public Future<Void> end() {
-    Promise<Void> promise = Promise.promise();
-    end((ByteBuf) null, promise);
+    Promise<Void> promise = stream.context.promise();
+    write(null, true, promise);
     return promise.future();
   }
 
@@ -454,6 +458,9 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
       if (headersEndHandler != null) {
         headersEndHandler.handle(null);
       }
+      if (cookies != null) {
+        setCookies();
+      }
       sanitizeHeaders();
       headWritten = true;
       headers.status(Integer.toString(status.code())); // Could be optimized for usual case ?
@@ -464,6 +471,14 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
       return true;
     } else {
       return false;
+    }
+  }
+
+  private void setCookies() {
+    for (ServerCookie cookie: cookies.values()) {
+      if (cookie.isChanged()) {
+        headers.add(SET_COOKIE, cookie.encode());
+      }
     }
   }
 
@@ -521,9 +536,6 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
     if (ended) {
       throw new IllegalStateException("Response has already been written");
     }
-    if (closed) {
-      throw new IllegalStateException("Response is closed");
-    }
   }
 
   void writabilityChanged() {
@@ -561,68 +573,69 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
   }
 
   @Override
+  public Future<Void> sendFile(String filename, long offset, long length) {
+    Promise<Void> promise = stream.context.promise();
+    sendFile(filename, offset, length, promise);
+    return promise.future();
+  }
+
+  @Override
   public HttpServerResponse sendFile(String filename, long offset, long length, Handler<AsyncResult<Void>> resultHandler) {
     synchronized (conn) {
       checkValid();
 
-      Context resultCtx = resultHandler != null ? stream.vertx.getOrCreateContext() : null;
+      Handler<AsyncResult<Void>> h;
+      if (resultHandler != null) {
+        Context resultCtx = stream.vertx.getOrCreateContext();
+        h = ar -> {
+          resultCtx.runOnContext((v) -> {
+            resultHandler.handle(ar);
+          });
+        };
+      } else {
+        h = ar -> {};
+      }
 
-      File file = stream.vertx.resolveFile(filename);
-      if (!file.exists()) {
+      File file_ = stream.vertx.resolveFile(filename);
+      if (!file_.exists()) {
         if (resultHandler != null) {
-          resultCtx.runOnContext((v) -> resultHandler.handle(Future.failedFuture(new FileNotFoundException())));
+          h.handle(Future.failedFuture(new FileNotFoundException()));
         } else {
-           log.error("File not found: " + filename);
+          log.error("File not found: " + filename);
         }
         return this;
       }
-
-      RandomAccessFile raf;
-      try {
-        raf = new RandomAccessFile(file, "r");
+      try(RandomAccessFile raf = new RandomAccessFile(file_, "r")) {
       } catch (IOException e) {
         if (resultHandler != null) {
-          resultCtx.runOnContext((v) -> resultHandler.handle(Future.failedFuture(e)));
+          h.handle(Future.failedFuture(e));
         } else {
           log.error("Failed to send file", e);
         }
         return this;
       }
 
-      long contentLength = Math.min(length, file.length() - offset);
-      if (headers.get(HttpHeaderNames.CONTENT_LENGTH) == null) {
-        putHeader(HttpHeaderNames.CONTENT_LENGTH, String.valueOf(contentLength));
-      }
-      if (headers.get(HttpHeaderNames.CONTENT_TYPE) == null) {
-        String contentType = MimeMapping.getMimeTypeForFilename(filename);
-        if (contentType != null) {
-          putHeader(HttpHeaderNames.CONTENT_TYPE, contentType);
-        }
-      }
-      checkSendHeaders(false);
+      long contentLength = Math.min(length, file_.length() - offset);
 
-      Promise<Long> result = Promise.promise();
-      result.future().setHandler(ar -> {
+      FileSystem fs = conn.vertx().fileSystem();
+      fs.open(filename, new OpenOptions().setCreate(false).setWrite(false), ar -> {
         if (ar.succeeded()) {
-          end();
-        }
-        if (resultHandler != null) {
-          resultCtx.runOnContext(v -> {
-            resultHandler.handle(Future.succeededFuture());
-          });
-        }
-      });
-
-      FileStreamChannel fileChannel = new FileStreamChannel(result, stream, offset, contentLength);
-      drainHandler(fileChannel.drainHandler);
-      ctx.channel()
-        .eventLoop()
-        .register(fileChannel)
-        .addListener((ChannelFutureListener) future -> {
-        if (future.isSuccess()) {
-          fileChannel.pipeline().fireUserEventTriggered(raf);
+          AsyncFile file = ar.result();
+          if (headers.get(HttpHeaderNames.CONTENT_LENGTH) == null) {
+            putHeader(HttpHeaderNames.CONTENT_LENGTH, String.valueOf(contentLength));
+          }
+          if (headers.get(HttpHeaderNames.CONTENT_TYPE) == null) {
+            String contentType = MimeMapping.getMimeTypeForFilename(filename);
+            if (contentType != null) {
+              putHeader(HttpHeaderNames.CONTENT_TYPE, contentType);
+            }
+          }
+          checkSendHeaders(false);
+          file.setReadPos(offset);
+          file.setReadLength(contentLength);
+          file.pipeTo(this, h);
         } else {
-          result.tryFail(future.cause());
+          h.handle(ar.mapEmpty());
         }
       });
     }
@@ -692,35 +705,76 @@ public class Http2ServerResponseImpl implements HttpServerResponse {
   }
 
   @Override
-  public HttpServerResponse push(HttpMethod method, String host, String path, Handler<AsyncResult<HttpServerResponse>> handler) {
-    return push(method, host, path, null, handler);
+  public Future<HttpServerResponse> push(HttpMethod method, String host, String path) {
+    return push(method, host, path, (MultiMap) null);
   }
 
   @Override
-  public HttpServerResponse push(HttpMethod method, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler) {
-    return push(method, null, path, headers, handler);
+  public Future<HttpServerResponse> push(HttpMethod method, String path, MultiMap headers) {
+    return push(method, null, path, headers);
   }
 
   @Override
-  public HttpServerResponse push(HttpMethod method, String host, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler) {
+  public Future<HttpServerResponse> push(HttpMethod method, String path) {
+    return push(method, host, path);
+  }
+
+  @Override
+  public Future<HttpServerResponse> push(HttpMethod method, String host, String path, MultiMap headers) {
     synchronized (conn) {
       if (push) {
         throw new IllegalStateException("A push response cannot promise another push");
       }
       checkValid();
-      conn.sendPush(stream.id(), host, method, headers, path, stream.priority(), handler);
-      return this;
+      return conn.sendPush(stream.id(), host, method, headers, path, stream.priority());
     }
   }
 
   @Override
+  public HttpServerResponse push(HttpMethod method, String host, String path, Handler<AsyncResult<HttpServerResponse>> handler) {
+    push(method, host, path).setHandler(handler);
+    return this;
+  }
+
+  @Override
+  public HttpServerResponse push(HttpMethod method, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler) {
+    push(method, path, headers).setHandler(handler);
+    return this;
+  }
+
+  @Override
+  public HttpServerResponse push(HttpMethod method, String host, String path, MultiMap headers, Handler<AsyncResult<HttpServerResponse>> handler) {
+    push(method, host, path, headers).setHandler(handler);
+    return this;
+  }
+
+  @Override
   public HttpServerResponse push(HttpMethod method, String path, Handler<AsyncResult<HttpServerResponse>> handler) {
-    return push(method, host, path, handler);
+    push(method, path).setHandler(handler);
+    return this;
   }
 
   @Override
   public HttpServerResponse setStreamPriority(StreamPriority priority) {
     stream.updatePriority(priority);
     return this;
+  }
+
+  Map<String, ServerCookie> cookies() {
+    if (cookies == null) {
+      cookies = CookieImpl.extractCookies(stream.headers != null ? stream.headers.get(io.vertx.core.http.HttpHeaders.COOKIE) : null);
+    }
+    return cookies;
+  }
+
+  @Override
+  public HttpServerResponse addCookie(Cookie cookie) {
+    cookies().put(cookie.getName(), (ServerCookie) cookie);
+    return this;
+  }
+
+  @Override
+  public @Nullable Cookie removeCookie(String name, boolean invalidate) {
+    return CookieImpl.removeCookie(cookies(), name, invalidate);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -28,7 +28,6 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.impl.NetSocketInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -121,25 +120,30 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   }
 
   @Override
-  public synchronized NetSocketInternal writeMessage(Object message) {
+  public synchronized Future<Void> writeMessage(Object message) {
     if (closed) {
       throw new IllegalStateException("Socket is closed");
     }
-    writeToChannel(message);
-    return this;
+    Promise<Void> promise = context.promise();
+    writeMessage(message, promise);
+    return promise.future();
   }
 
   @Override
   public NetSocketInternal writeMessage(Object message, Handler<AsyncResult<Void>> handler) {
-    writeToChannel(message, toPromise(handler));
+    if (closed) {
+      throw new IllegalStateException("Socket is closed");
+    }
+    if (message instanceof ByteBuf) {
+      reportBytesWritten(((ByteBuf)message).readableBytes());
+    }
+    writeToChannel(message, handler == null ? null : context.promise(handler));
     return this;
   }
 
   @Override
   public Future<Void> write(Buffer data) {
-    Promise<Void> promise = Promise.promise();
-    write(data, promise);
-    return promise.future();
+    return writeMessage(data.getByteBuf());
   }
 
   @Override
@@ -149,16 +153,12 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
 
   @Override
   public Future<Void> write(String str) {
-    Promise<Void> promise = Promise.promise();
-    write(Unpooled.copiedBuffer(str, CharsetUtil.UTF_8), promise);
-    return promise.future();
+    return writeMessage(Unpooled.copiedBuffer(str, CharsetUtil.UTF_8));
   }
 
   @Override
   public Future<Void> write(String str, String enc) {
-    Promise<Void> promise = Promise.promise();
-    write(Unpooled.copiedBuffer(str, Charset.forName(enc)), promise);
-    return promise.future();
+    return writeMessage(Unpooled.copiedBuffer(str, Charset.forName(enc)));
   }
 
   @Override
@@ -243,6 +243,13 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   }
 
   @Override
+  public Future<Void> sendFile(String filename, long offset, long length) {
+    Promise<Void> promise = context.promise();
+    sendFile(filename, offset, length, promise);
+    return promise.future();
+  }
+
+  @Override
   public NetSocket sendFile(String filename, long offset, long length, final Handler<AsyncResult<Void>> resultHandler) {
     File f = vertx.resolveFile(filename);
     if (f.isDirectory()) {
@@ -289,6 +296,20 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
   }
 
   @Override
+  public Future<Void> upgradeToSsl() {
+    Promise<Void> promise = context.promise();
+    upgradeToSsl(promise);
+    return promise.future();
+  }
+
+  @Override
+  public Future<Void> upgradeToSsl(String serverName) {
+    Promise<Void> promise = context.promise();
+    upgradeToSsl(serverName, promise);
+    return promise.future();
+  }
+
+  @Override
   public NetSocket upgradeToSsl(Handler<AsyncResult<Void>> handler) {
     return upgradeToSsl(null, handler);
   }
@@ -299,7 +320,7 @@ public class NetSocketImpl extends ConnectionBase implements NetSocketInternal {
     if (sslHandler == null) {
       chctx.pipeline().addFirst("handshaker", new SslHandshakeCompletionHandler(ar -> {
         if (handler != null) {
-          handler.handle(ar.mapEmpty());
+          context.emitFromIO(ar.mapEmpty(), handler);
         }
       }));
       if (remoteAddress != null) {

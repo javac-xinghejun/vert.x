@@ -4,21 +4,13 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
-import io.vertx.core.spi.json.JsonCodec;
 
 /**
- * Converter and Codec for {@link io.vertx.core.net.NetServerOptions}.
+ * Converter and mapper for {@link io.vertx.core.net.NetServerOptions}.
  * NOTE: This class has been automatically generated from the {@link io.vertx.core.net.NetServerOptions} original class using Vert.x codegen.
  */
-public class NetServerOptionsConverter implements JsonCodec<NetServerOptions, JsonObject> {
+public class NetServerOptionsConverter {
 
-  public static final NetServerOptionsConverter INSTANCE = new NetServerOptionsConverter();
-
-  @Override public JsonObject encode(NetServerOptions value) { return (value != null) ? value.toJson() : null; }
-
-  @Override public NetServerOptions decode(JsonObject value) { return (value != null) ? new NetServerOptions(value) : null; }
-
-  @Override public Class<NetServerOptions> getTargetClass() { return NetServerOptions.class; }
 
    static void fromJson(Iterable<java.util.Map.Entry<String, Object>> json, NetServerOptions obj) {
     for (java.util.Map.Entry<String, Object> member : json) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -37,7 +37,6 @@ import io.vertx.core.net.impl.VertxHandler;
 import io.vertx.core.spi.metrics.HttpServerMetrics;
 
 import java.nio.charset.StandardCharsets;
-import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -151,7 +150,7 @@ import java.util.function.Function;
   private void handleException(Channel ch, Throwable cause) {
     HandlerHolder<? extends Handler<Throwable>> holder = errorHandler.apply(ch.eventLoop());
     if (holder != null) {
-      holder.context.executeFromIO(cause, holder.handler);
+      holder.context.emitFromIO(cause, holder.handler);
     }
   }
 
@@ -206,7 +205,7 @@ import java.util.function.Function;
       if (options.getHttp2ConnectionWindowSize() > 0) {
         conn.setWindowSize(options.getHttp2ConnectionWindowSize());
       }
-      ctx.executeFromIO(conn, handler_);
+      ctx.emitFromIO(conn, handler_);
     });
     return handler;
   }
@@ -236,7 +235,7 @@ import java.util.function.Function;
     if (disableH2C) {
       configureHttp1(pipeline, holder);
     } else {
-      pipeline.addLast("h2c", new Http1xUpgradeToH2CHandler(this, holder));
+      pipeline.addLast("h2c", new Http1xUpgradeToH2CHandler(this, holder, options.isCompressionSupported(), options.isDecompressionSupported()));
     }
   }
 
@@ -254,9 +253,9 @@ import java.util.function.Function;
     pipeline.addLast("handler", handler);
     Http1xServerConnection conn = handler.getConnection();
     if (metrics != null) {
-      holder.context.executeFromIO(v -> conn.metric(metrics.connected(conn.remoteAddress(), conn.remoteName())));
+      holder.context.emitFromIO(v -> conn.metric(metrics.connected(conn.remoteAddress(), conn.remoteName())));
     }
-    holder.context.executeFromIO(conn, holder.handler);
+    holder.context.emitFromIO(conn, holder.handler);
   }
 
 

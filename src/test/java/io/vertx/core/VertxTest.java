@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -51,15 +51,15 @@ public class VertxTest extends AsyncTestBase {
   }
 
   @Test
-  public void testCloseHookFailure1() throws Exception {
+  public void testCloseHookFailure1() {
     AtomicInteger closedCount = new AtomicInteger();
     class Hook implements Closeable {
       @Override
-      public void close(Handler<AsyncResult<Void>> completionHandler) {
+      public void close(Promise<Void> completion) {
         if (closedCount.incrementAndGet() == 1) {
           throw new RuntimeException();
         } else {
-          completionHandler.handle(Future.succeededFuture());
+          completion.handle(Future.succeededFuture());
         }
       }
     }
@@ -80,12 +80,12 @@ public class VertxTest extends AsyncTestBase {
     AtomicInteger closedCount = new AtomicInteger();
     class Hook implements Closeable {
       @Override
-      public void close(Handler<AsyncResult<Void>> completionHandler) {
+      public void close(Promise<Void> completion) {
         if (closedCount.incrementAndGet() == 1) {
-          completionHandler.handle(Future.succeededFuture());
+          completion.handle(Future.succeededFuture());
           throw new RuntimeException();
         } else {
-          completionHandler.handle(Future.succeededFuture());
+          completion.handle(Future.succeededFuture());
         }
       }
     }

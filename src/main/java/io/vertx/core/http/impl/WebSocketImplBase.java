@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -14,9 +14,10 @@ package io.vertx.core.http.impl;
 import io.netty.buffer.ByteBuf;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Promise;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.Promise;
+import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.Message;
@@ -64,6 +65,9 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
   private Handler<Void> endHandler;
   protected final Http1xConnectionBase conn;
   protected boolean closed;
+  private Short closeStatusCode;
+  private String closeReason;
+  private MultiMap headers;
 
   WebSocketImplBase(ContextInternal context, Http1xConnectionBase conn, boolean supportsContinuation,
                               int maxWebSocketFrameSize, int maxWebSocketMessageSize) {
@@ -105,7 +109,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> close() {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     close(promise);
     return promise.future();
   }
@@ -117,7 +121,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> close(short statusCode) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     close(statusCode, promise);
     return promise.future();
   }
@@ -129,21 +133,19 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> close(short statusCode, String reason) {
-    Promise<Void> promise = Promise.promise();
-    close(statusCode, reason, promise);
-    return promise.future();
-  }
-
-  @Override
-  public void close(short statusCode, @Nullable String reason, Handler<AsyncResult<Void>> handler) {
     synchronized (conn) {
       if (closed) {
-        return;
+        return context.succeededFuture();
       }
       closed = true;
     }
     unregisterHandlers();
-    conn.closeWithPayload(statusCode, reason, handler);
+    return conn.closeWithPayload(statusCode, reason);
+  }
+
+  @Override
+  public void close(short statusCode, @Nullable String reason, Handler<AsyncResult<Void>> handler) {
+    close(statusCode, reason).setHandler(handler);
   }
 
   @Override
@@ -173,7 +175,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> writeFinalTextFrame(String text) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     writeFinalTextFrame(text, promise);
     return promise.future();
   }
@@ -185,7 +187,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> writeFinalBinaryFrame(Buffer data) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     writeFinalBinaryFrame(data, promise);
     return promise.future();
   }
@@ -209,8 +211,35 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
   }
 
   @Override
+  public Short closeStatusCode() {
+    synchronized (conn) {
+      return closeStatusCode;
+    }
+  }
+
+  @Override
+  public String closeReason() {
+    synchronized (conn) {
+      return closeReason;
+    }
+  }
+
+  @Override
+  public MultiMap headers() {
+    synchronized(conn) {
+      return headers;
+    }
+  }
+
+  void headers(MultiMap responseHeaders) {
+    synchronized(conn) {
+      this.headers = responseHeaders;
+    }
+  }
+
+  @Override
   public Future<Void> writeBinaryMessage(Buffer data) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     writeBinaryMessage(data, promise);
     return promise.future();
   }
@@ -226,7 +255,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> writeTextMessage(String text) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     writeTextMessage(text, promise);
     return promise.future();
   }
@@ -243,31 +272,44 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> write(Buffer data) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(data, promise);
     return promise.future();
   }
 
   @Override
   public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
-    synchronized (conn) {
-      checkClosed();
-      writeFrame(WebSocketFrame.binaryFrame(data, true), handler);
+    writeFrame(WebSocketFrame.binaryFrame(data, true), handler);
+  }
+
+  @Override
+  public Future<Void> writePing(Buffer data) {
+    Promise<Void> promise = context.promise();
+    writePing(data, promise);
+    return promise.future();
+  }
+
+  @Override
+  public WebSocketBase writePing(Buffer data, Handler<AsyncResult<Void>> handler) {
+    if(data.length() > maxWebSocketFrameSize || data.length() > 125) {
+      throw new IllegalStateException("Ping cannot exceed maxWebSocketFrameSize or 125 bytes");
     }
+    return writeFrame(WebSocketFrame.pingFrame(data), handler);
   }
 
   @Override
-  public S writePing(Buffer data) {
-    if(data.length() > maxWebSocketFrameSize || data.length() > 125) throw new IllegalStateException("Ping cannot exceed maxWebSocketFrameSize or 125 bytes");
-    writeFrame(WebSocketFrame.pingFrame(data), null);
-    return (S) this;
+  public Future<Void> writePong(Buffer data) {
+    Promise<Void> promise = context.promise();
+    writePong(data, promise);
+    return promise.future();
   }
 
   @Override
-  public S writePong(Buffer data) {
-    if(data.length() > maxWebSocketFrameSize || data.length() > 125) throw new IllegalStateException("Pong cannot exceed maxWebSocketFrameSize or 125 bytes");
-    writeFrame(WebSocketFrame.pongFrame(data), null);
-    return (S) this;
+  public WebSocketBase writePong(Buffer data, Handler<AsyncResult<Void>> handler) {
+    if(data.length() > maxWebSocketFrameSize || data.length() > 125) {
+      throw new IllegalStateException("Pong cannot exceed maxWebSocketFrameSize or 125 bytes");
+    }
+    return writeFrame(WebSocketFrame.pongFrame(data), handler);
   }
 
   /**
@@ -312,7 +354,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
 
   @Override
   public Future<Void> writeFrame(WebSocketFrame frame) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     writeFrame(frame, promise);
     return promise.future();
   }
@@ -321,7 +363,7 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
     synchronized (conn) {
       checkClosed();
       conn.reportBytesWritten(((WebSocketFrameInternal)frame).length());
-      conn.writeToChannel(conn.encodeFrame((WebSocketFrameImpl) frame), conn.toPromise(handler));
+      conn.writeToChannel(conn.encodeFrame((WebSocketFrameImpl) frame), handler == null ? null : context.promise(handler));
     }
     return (S) this;
   }
@@ -354,8 +396,11 @@ public abstract class WebSocketImplBase<S extends WebSocketBase> implements WebS
             pongHandler.handle(frame.binaryData());
           }
           break;
-        case TEXT:
         case CLOSE:
+          closeStatusCode = frame.closeStatusCode();
+          closeReason = frame.closeReason();
+          // Continue through
+        case TEXT:
         case BINARY:
         case CONTINUATION:
           if (frameHandler != null) {

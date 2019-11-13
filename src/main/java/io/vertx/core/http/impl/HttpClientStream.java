@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -12,6 +12,7 @@
 package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.util.concurrent.FutureListener;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
@@ -43,8 +44,8 @@ public interface HttpClientStream {
   HttpConnection connection();
   ContextInternal getContext();
 
-  void writeHead(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked, ByteBuf buf, boolean end, StreamPriority priority, Handler<Void> contHandler, Handler<AsyncResult<Void>> handler);
-  void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> handler);
+  void writeHead(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked, ByteBuf buf, boolean end, StreamPriority priority, Handler<Void> contHandler, Handler<AsyncResult<Void>> listener);
+  void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> listener);
   void writeFrame(int type, int flags, ByteBuf payload);
 
   void doSetWriteQueueMaxSize(int size);
@@ -57,7 +58,7 @@ public interface HttpClientStream {
   void endRequest();
 
   NetSocket createNetSocket();
-  
+
   StreamPriority priority();
   void updatePriority(StreamPriority streamPriority);
 }

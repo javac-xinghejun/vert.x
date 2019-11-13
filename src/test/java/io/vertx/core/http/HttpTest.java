@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -16,8 +16,8 @@ import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http2.Http2Exception;
 import io.vertx.codegen.annotations.Nullable;
-import io.vertx.core.*;
 import io.vertx.core.Future;
+import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.dns.AddressResolverOptions;
 import io.vertx.core.file.AsyncFile;
@@ -34,6 +34,8 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.*;
 import java.net.URLEncoder;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -491,7 +493,7 @@ public abstract class HttpTest extends HttpTestBase {
     File file = setupFile("test-server-chaining.dat", "blah");
     server.requestHandler(req -> {
       assertTrue(req.response().sendFile(file.getAbsolutePath(), null) == req.response());
-      assertTrue(req.response().ended());
+//      assertTrue(req.response().ended());
       file.delete();
       testComplete();
     });
@@ -624,6 +626,22 @@ public abstract class HttpTest extends HttpTestBase {
         });
       })).end();
     }));
+    await();
+  }
+
+  @Test
+  public void testResponseEndHandlersConnectionClose() {
+    waitFor(2);
+    server.requestHandler(req -> {
+      req.response().endHandler(v -> complete());
+      req.response().end();
+    }).listen(onSuccess(server ->
+      client.request(HttpMethod.GET, DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/", onSuccess(res -> {
+        assertEquals(200, res.statusCode());
+        complete();
+      }))
+      .putHeader(HttpHeaders.CONNECTION, "close")
+      .end()));
     await();
   }
 
@@ -975,19 +993,19 @@ public abstract class HttpTest extends HttpTestBase {
       req.end();
 
       Buffer buff = Buffer.buffer();
-      assertIllegalStateException2(() -> req.end());
+      assertIllegalStateExceptionAsync(() -> req.end());
       assertIllegalStateException(() -> req.continueHandler(noOpHandler()));
       assertIllegalStateException(() -> req.drainHandler(noOpHandler()));
-      assertIllegalStateException2(() -> req.end("foo"));
-      assertIllegalStateException2(() -> req.end(buff));
-      assertIllegalStateException2(() -> req.end("foo", "UTF-8"));
+      assertIllegalStateExceptionAsync(() -> req.end("foo"));
+      assertIllegalStateExceptionAsync(() -> req.end(buff));
+      assertIllegalStateExceptionAsync(() -> req.end("foo", "UTF-8"));
       assertIllegalStateException(() -> req.sendHead());
       assertIllegalStateException(() -> req.setChunked(false));
       assertIllegalStateException(() -> req.setWriteQueueMaxSize(123));
-      assertIllegalStateException2(() -> req.write(buff));
-      assertIllegalStateException2(() -> req.write("foo"));
-      assertIllegalStateException2(() -> req.write("foo", "UTF-8"));
-      assertIllegalStateException2(() -> req.write(buff));
+      assertIllegalStateExceptionAsync(() -> req.write(buff));
+      assertIllegalStateExceptionAsync(() -> req.write("foo"));
+      assertIllegalStateExceptionAsync(() -> req.write("foo", "UTF-8"));
+      assertIllegalStateExceptionAsync(() -> req.write(buff));
       assertIllegalStateException(() -> req.writeQueueFull());
 
       testComplete();
@@ -1248,6 +1266,7 @@ public abstract class HttpTest extends HttpTestBase {
     await();
   }
 
+  @Repeat(times = 10)
   @Test
   public void testClientExceptionHandlerCalledWhenServerTerminatesConnection() throws Exception {
     int numReqs = 10;
@@ -1259,9 +1278,7 @@ public abstract class HttpTest extends HttpTestBase {
       for (int i = 0; i < numReqs; i++) {
         client.request(HttpMethod.GET, testAddress, DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, DEFAULT_TEST_URI, onFailure(err -> {
           complete();
-        }))
-          .exceptionHandler(error -> fail("Exception handler should not be called"))
-          .end();
+        })).end();
       }
     }));
     await();
@@ -1350,6 +1367,7 @@ public abstract class HttpTest extends HttpTestBase {
 
   @Test
   public void testServerExceptionHandlerOnClose() {
+    waitFor(3);
     vertx.createHttpServer().requestHandler(req -> {
       HttpServerResponse resp = req.response();
       AtomicInteger reqExceptionHandlerCount = new AtomicInteger();
@@ -1371,17 +1389,19 @@ public abstract class HttpTest extends HttpTestBase {
         assertEquals(0, reqExceptionHandlerCount.get());
         assertEquals(1, respExceptionHandlerCount.incrementAndGet());
         assertEquals(0, respEndHandlerCount.get());
+        complete();
       });
       resp.endHandler(v -> {
         assertEquals(0, reqExceptionHandlerCount.get());
         assertEquals(1, respExceptionHandlerCount.get());
         assertEquals(1, respEndHandlerCount.incrementAndGet());
+        complete();
       });
       req.connection().closeHandler(v -> {
         assertEquals(1, reqExceptionHandlerCount.get());
         assertEquals(1, respExceptionHandlerCount.get());
         assertEquals(1, respEndHandlerCount.get());
-        testComplete();
+        complete();
       });
     }).listen(testAddress, ar -> {
       HttpClient client = vertx.createHttpClient();
@@ -1566,30 +1586,20 @@ public abstract class HttpTest extends HttpTestBase {
   }
 
   @Test
-  public void testUseResponseAfterComplete() throws Exception {
+  public void testUseAfterServerResponseEnd() throws Exception {
     server.requestHandler(req -> {
       HttpServerResponse resp = req.response();
       assertFalse(resp.ended());
       resp.end();
       assertTrue(resp.ended());
-      checkHttpServerResponse(resp, true, onSuccess(v -> {
-        testComplete();
-      }));
-    });
-    startServer(testAddress);
-    client.request(HttpMethod.GET, testAddress, DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, DEFAULT_TEST_URI, noOpHandler()).end();
-    await();
-  }
-
-  private void checkHttpServerResponse(HttpServerResponse resp, boolean sync, Handler<AsyncResult<Void>> handler) {
-    Buffer buff = Buffer.buffer();
-    assertIllegalStateException(() -> resp.drainHandler(noOpHandler()));
-    assertIllegalStateException(() -> resp.exceptionHandler(noOpHandler()));
-    assertIllegalStateException(() -> resp.setChunked(false));
-    assertIllegalStateException(() -> resp.setWriteQueueMaxSize(123));
-    assertIllegalStateException(() -> resp.writeQueueFull());
-    assertIllegalStateException(() -> resp.sendFile("asokdasokd"));
-    if (sync) {
+      Buffer buff = Buffer.buffer();
+      assertIllegalStateException(() -> resp.drainHandler(noOpHandler()));
+      assertIllegalStateException(() -> resp.exceptionHandler(noOpHandler()));
+      assertIllegalStateException(() -> resp.setChunked(false));
+      assertIllegalStateException(() -> resp.setWriteQueueMaxSize(123));
+      assertIllegalStateException(() -> resp.writeQueueFull());
+      assertIllegalStateException(() -> resp.putHeader("foo", "bar"));
+      assertIllegalStateException(() -> resp.sendFile("webroot/somefile.html"));
       assertIllegalStateException(() -> resp.end());
       assertIllegalStateException(() -> resp.end("foo"));
       assertIllegalStateException(() -> resp.end(buff));
@@ -1598,37 +1608,20 @@ public abstract class HttpTest extends HttpTestBase {
       assertIllegalStateException(() -> resp.write("foo"));
       assertIllegalStateException(() -> resp.write("foo", "UTF-8"));
       assertIllegalStateException(() -> resp.write(buff));
-      handler.handle(Future.succeededFuture());
-    } else {
-      resp.write(buff);
-      resp.write("foo");
-      resp.write("foo", "UTF-8");
-      resp.write(buff, ar1 -> {
-        if (ar1.succeeded()) {
-          handler.handle(Future.failedFuture("Was expecting a failure"));
-        } else {
-          resp.write("foo", ar2 -> {
-            if (ar2.succeeded()) {
-              handler.handle(Future.failedFuture("Was expecting a failure"));
-            } else {
-              resp.write("foo", "UTF-8", ar3 -> {
-                if (ar3.succeeded()) {
-                  handler.handle(Future.failedFuture("Was expecting a failure"));
-                } else {
-                  resp.end(ar4 -> {
-                    if (ar4.succeeded()) {
-                      handler.handle(Future.failedFuture("Was expecting a failure"));
-                    } else {
-                      handler.handle(Future.succeededFuture());
-                    }
-                  });
-                }
-              });
-            }
-          });
-        }
-      });
-    }
+      assertIllegalStateException(() -> resp.sendFile("webroot/somefile.html", ar -> {}));
+      assertIllegalStateException(() -> resp.end(ar -> {}));
+      assertIllegalStateException(() -> resp.end("foo", ar -> {}));
+      assertIllegalStateException(() -> resp.end(buff, ar -> {}));
+      assertIllegalStateException(() -> resp.end("foo", "UTF-8", ar -> {}));
+      assertIllegalStateException(() -> resp.write(buff, ar -> {}));
+      assertIllegalStateException(() -> resp.write("foo", ar -> {}));
+      assertIllegalStateException(() -> resp.write("foo", "UTF-8", ar -> {}));
+      assertIllegalStateException(() -> resp.write(buff, ar -> {}));
+      testComplete();
+    });
+    startServer(testAddress);
+    client.request(HttpMethod.GET, testAddress, DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, DEFAULT_TEST_URI, noOpHandler()).end();
+    await();
   }
 
   @Test
@@ -3711,6 +3704,21 @@ public abstract class HttpTest extends HttpTestBase {
     testFollowRedirect(HttpMethod.GET, HttpMethod.GET, 301, 200, 2, "/another", "http://localhost:8080/another");
   }
 
+  @Test
+  public void testFollowRedirectGetOn308() throws Exception {
+    testFollowRedirect(HttpMethod.GET, HttpMethod.GET, 308, 200, 2, "http://localhost:8080/redirected", "http://localhost:8080/redirected");
+  }
+
+  @Test
+  public void testFollowRedirectPostOn308() throws Exception {
+    testFollowRedirect(HttpMethod.POST, HttpMethod.POST, 308, 308, 1, "http://localhost:8080/redirected", "http://localhost:8080/somepath");
+  }
+
+  @Test
+  public void testFollowRedirectPutOn308() throws Exception {
+    testFollowRedirect(HttpMethod.PUT, HttpMethod.PUT, 308, 308, 1, "http://localhost:8080/redirected", "http://localhost:8080/somepath");
+  }
+
   private void testFollowRedirect(
       HttpMethod method,
       HttpMethod expectedMethod,
@@ -4111,7 +4119,7 @@ public abstract class HttpTest extends HttpTestBase {
       public boolean writeQueueFull() { throw new UnsupportedOperationException(); }
       public HttpClientRequest setStreamPriority(StreamPriority streamPriority) { return this; }
       public StreamPriority getStreamPriority() { return null; }
-      public HttpClientRequest setHandler(Handler<AsyncResult<HttpClientResponse>> handler) { throw new UnsupportedOperationException(); }
+      public HttpClientRequest onComplete(Handler<AsyncResult<HttpClientResponse>> handler) { throw new UnsupportedOperationException(); }
       public boolean isComplete() { throw new UnsupportedOperationException(); }
       public Handler<AsyncResult<HttpClientResponse>> getHandler() { throw new UnsupportedOperationException(); }
       public boolean tryComplete(HttpClientResponse result) { throw new UnsupportedOperationException(); }
@@ -4345,22 +4353,62 @@ public abstract class HttpTest extends HttpTestBase {
   }
 
   @Test
-  public void testCloseHandlerWhenConnectionClose() throws Exception {
+  public void testUseResponseAfterClose() throws Exception {
+    testAfterServerResponseClose(resp -> {
+      Buffer buff = Buffer.buffer();
+      resp.drainHandler(noOpHandler());
+      resp.exceptionHandler(noOpHandler());
+      resp.setChunked(false);
+      resp.setWriteQueueMaxSize(123);
+      resp.writeQueueFull();
+      resp.putHeader("foo", "bar");
+      resp.setChunked(true);
+      resp.write(buff);
+      resp.write("foo");
+      resp.write("foo", "UTF-8");
+      resp.write(buff, onFailure(err1 -> {
+        resp.write("foo", onFailure( err2 -> {
+          resp.write("foo", "UTF-8", onFailure(err3 -> {
+            resp.end(onFailure(err4 -> {
+              testComplete();
+            }));
+          }));
+        }));
+      }));
+    });
+  }
+
+  @Test
+  public void testSendFileAfterServerResponseClose() throws Exception {
+    testAfterServerResponseClose(resp -> {
+      resp.sendFile("webroot/somefile.html");
+      testComplete();
+    });
+  }
+
+  @Test
+  public void testSendFileAsyncAfterServerResponseClose() throws Exception {
+    testAfterServerResponseClose(resp -> {
+      resp.sendFile("webroot/somefile.html", onFailure(err -> {
+        testComplete();
+      }));
+    });
+  }
+
+  private void testAfterServerResponseClose(Handler<HttpServerResponse> test) throws Exception {
+    AtomicReference<HttpConnection> clientConn = new AtomicReference<>();
     server.requestHandler(req -> {
       HttpServerResponse resp = req.response();
-      resp.setChunked(true).write("some-data");
       resp.closeHandler(v1 -> {
-        checkHttpServerResponse(resp, false, onSuccess(v2 -> {
-          testComplete();
-        }));
+        test.handle(resp);
       });
+      clientConn.get().close();
     });
     startServer();
-    client.getNow(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath", onSuccess(resp -> {
-      resp.handler(v -> {
-        resp.request().connection().close();
-      });
-    }));
+    client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath", onFailure(resp -> {
+    }))
+      .connectionHandler(clientConn::set)
+      .end();
     await();
   }
 
@@ -5241,6 +5289,230 @@ public abstract class HttpTest extends HttpTestBase {
         });
       });
     });
+    await();
+  }
+
+  @Test
+  public void testSimpleCookie() throws Exception {
+    testCookies("foo=bar", req -> {
+      assertEquals(1, req.cookieCount());
+      Cookie cookie = req.getCookie("foo");
+      assertNotNull(cookie);
+      assertEquals("bar", cookie.getValue());
+      req.response().end();
+    }, response -> {
+    });
+  }
+
+  @Test
+  public void testGetCookies() throws Exception {
+    testCookies("foo=bar; wibble=blibble; plop=flop", req -> {
+      assertEquals(3, req.cookieCount());
+      Map<String, Cookie> cookies = req.cookieMap();
+      assertTrue(cookies.containsKey("foo"));
+      assertTrue(cookies.containsKey("wibble"));
+      assertTrue(cookies.containsKey("plop"));
+      Cookie removed = req.response().removeCookie("foo");
+      cookies = req.cookieMap();
+      // removed cookies, need to be sent back with an expiration date
+      assertTrue(cookies.containsKey("foo"));
+      assertTrue(cookies.containsKey("wibble"));
+      assertTrue(cookies.containsKey("plop"));
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      // the expired cookie must be sent back
+      assertEquals(1, cookies.size());
+      assertTrue(cookies.get(0).contains("Max-Age=0"));
+      assertTrue(cookies.get(0).contains("Expires="));
+    });
+  }
+
+  @Test
+  public void testCookiesChanged() throws Exception {
+    testCookies("foo=bar; wibble=blibble; plop=flop", req -> {
+      assertEquals(3, req.cookieCount());
+      assertEquals("bar", req.getCookie("foo").getValue());
+      assertEquals("blibble", req.getCookie("wibble").getValue());
+      assertEquals("flop", req.getCookie("plop").getValue());
+      req.response().removeCookie("plop");
+      // the expected number of elements should remain the same as we're sending an invalidate cookie back
+      assertEquals(3, req.cookieCount());
+
+      assertEquals("bar", req.getCookie("foo").getValue());
+      assertEquals("blibble", req.getCookie("wibble").getValue());
+      assertNotNull(req.getCookie("plop"));
+      req.response().addCookie(Cookie.cookie("fleeb", "floob"));
+      assertEquals(4, req.cookieCount());
+      assertNull(req.response().removeCookie("blarb"));
+      assertEquals(4, req.cookieCount());
+      Cookie foo = req.getCookie("foo");
+      foo.setValue("blah");
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      assertEquals(3, cookies.size());
+      assertTrue(cookies.contains("foo=blah"));
+      assertTrue(cookies.contains("fleeb=floob"));
+      boolean found = false;
+      for (String s : cookies) {
+        if (s.startsWith("plop")) {
+          found = true;
+          assertTrue(s.contains("Max-Age=0"));
+          assertTrue(s.contains("Expires="));
+          break;
+        }
+      }
+      assertTrue(found);
+    });
+  }
+
+  @Test
+  public void testCookieFields() throws Exception {
+    Cookie cookie = Cookie.cookie("foo", "bar");
+    assertEquals("foo", cookie.getName());
+    assertEquals("bar", cookie.getValue());
+    assertEquals("foo=bar", cookie.encode());
+    assertNull(cookie.getPath());
+    cookie.setPath("/somepath");
+    assertEquals("/somepath", cookie.getPath());
+    assertEquals("foo=bar; Path=/somepath", cookie.encode());
+    assertNull(cookie.getDomain());
+    cookie.setDomain("foo.com");
+    assertEquals("foo.com", cookie.getDomain());
+    assertEquals("foo=bar; Path=/somepath; Domain=foo.com", cookie.encode());
+    long maxAge = 30 * 60;
+    cookie.setMaxAge(maxAge);
+
+
+    long now = System.currentTimeMillis();
+    String encoded = cookie.encode();
+    int startPos = encoded.indexOf("Expires=");
+    int endPos = encoded.indexOf(';', startPos);
+    String expiresDate = encoded.substring(startPos + 8, endPos);
+    // RFC1123
+    DateFormat dtf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.ENGLISH);
+    dtf.setTimeZone(TimeZone.getTimeZone("GMT"));
+    Date d = dtf.parse(expiresDate);
+    assertTrue(d.getTime() - now >= maxAge);
+
+    cookie.setMaxAge(Long.MIN_VALUE);
+    cookie.setSecure(true);
+    assertEquals("foo=bar; Path=/somepath; Domain=foo.com; Secure", cookie.encode());
+    cookie.setHttpOnly(true);
+    assertEquals("foo=bar; Path=/somepath; Domain=foo.com; Secure; HTTPOnly", cookie.encode());
+  }
+
+  @Test
+  public void testRemoveCookies() throws Exception {
+    testCookies("foo=bar", req -> {
+      Cookie removed = req.response().removeCookie("foo");
+      assertNotNull(removed);
+      assertEquals("foo", removed.getName());
+      assertEquals("bar", removed.getValue());
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      // the expired cookie must be sent back
+      assertEquals(1, cookies.size());
+      assertTrue(cookies.get(0).contains("foo=bar"));
+      assertTrue(cookies.get(0).contains("Max-Age=0"));
+      assertTrue(cookies.get(0).contains("Expires="));
+    });
+  }
+
+  @Test
+  public void testNoCookiesRemoveCookie() throws Exception {
+    testCookies(null, req -> {
+      req.response().removeCookie("foo");
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      assertEquals(0, cookies.size());
+    });
+  }
+
+  @Test
+  public void testNoCookiesCookieCount() throws Exception {
+    testCookies(null, req -> {
+      assertEquals(0, req.cookieCount());
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      assertEquals(0, cookies.size());
+    });
+  }
+
+  @Test
+  public void testNoCookiesGetCookie() throws Exception {
+    testCookies(null, req -> {
+      assertNull(req.getCookie("foo"));
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      assertEquals(0, cookies.size());
+    });
+  }
+
+  @Test
+  public void testNoCookiesAddCookie() throws Exception {
+    testCookies(null, req -> {
+      assertEquals(req.response(), req.response().addCookie(Cookie.cookie("foo", "bar")));
+      req.response().end();
+    }, resp -> {
+      List<String> cookies = resp.headers().getAll("set-cookie");
+      assertEquals(1, cookies.size());
+    });
+  }
+
+  private void testCookies(String cookieHeader, Consumer<HttpServerRequest> serverChecker, Consumer<HttpClientResponse> clientChecker) throws Exception {
+    server.requestHandler(serverChecker::accept);
+    startServer(testAddress);
+    client.request(
+      HttpMethod.GET,
+      testAddress,
+      new RequestOptions()
+        .setPort(DEFAULT_HTTP_PORT)
+        .setHost(DEFAULT_HTTP_HOST)
+        .setURI(DEFAULT_TEST_URI), onSuccess(resp -> {
+        clientChecker.accept(resp);
+        testComplete();
+      })).putHeader(HttpHeaders.COOKIE.toString(), cookieHeader).end();
+    await();
+  }
+
+  @Test
+  public void testClientRequestFutureSetHandlerFromAnotherThread() throws Exception {
+    waitFor(2);
+    server.requestHandler(req -> {
+      req.response().end();
+    });
+    startServer(testAddress);
+    client.close();
+    Context ctx = vertx.getOrCreateContext();
+    CompletableFuture<HttpClientRequest> reqFut = new CompletableFuture<>();
+    ctx.runOnContext(v -> {
+      client = vertx.createHttpClient(createBaseClientOptions());
+      HttpClientRequest req = client.request(
+        HttpMethod.GET,
+        testAddress,
+        new RequestOptions()
+          .setPort(DEFAULT_HTTP_PORT)
+          .setHost(DEFAULT_HTTP_HOST)
+          .setURI(DEFAULT_TEST_URI), onSuccess(resp -> {
+          complete();
+        }));
+      reqFut.complete(req);
+    });
+    HttpClientRequest req = reqFut.get(10, TimeUnit.SECONDS);
+    Future<Void> endFut = req.end("msg");
+    waitUntil(endFut::succeeded);
+    // Set the handler after the future
+    endFut.setHandler(onSuccess(v -> {
+      assertNotNull(Vertx.currentContext());
+      assertSameEventLoop(ctx, Vertx.currentContext());
+      complete();
+    }));
     await();
   }
 }

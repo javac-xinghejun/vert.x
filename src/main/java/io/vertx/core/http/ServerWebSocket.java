@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -99,12 +99,6 @@ public interface ServerWebSocket extends WebSocketBase {
   String query();
 
   /**
-   * @return the headers in the WebSocket handshake
-   */
-  @CacheReturn
-  MultiMap headers();
-
-  /**
    * Accept the WebSocket and terminate the WebSocket handshake.
    * <p/>
    * This method should be called from the WebSocket handler to explicitly accept the WebSocket and
@@ -151,16 +145,15 @@ public interface ServerWebSocket extends WebSocketBase {
    * Calling this method will override the {@code future} completion handler.
    *
    * @param future the future to complete with
+   * @param handler the completion handler
    * @throws IllegalStateException when the WebSocket has already an asynchronous result
    */
-  void setHandshake(Promise<Integer> future);
+  void setHandshake(Future<Integer> future, Handler<AsyncResult<Integer>> handler);
 
   /**
-   * @deprecated instead use {@link #setHandshake(Promise)}
+   * Like {@link #setHandshake(Future, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  @GenIgnore
-  @Deprecated
-  void setHandshake(Future<Integer> future);
+  Future<Integer> setHandshake(Future<Integer> future);
 
   /**
    * {@inheritDoc}

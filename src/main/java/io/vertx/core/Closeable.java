@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -21,9 +21,9 @@ package io.vertx.core;
 public interface Closeable {
 
   /**
-   * Close this resource, the {@code completionHandler} must be notified when the operation has completed.
+   * Close this resource, the {@code completion} promise must be notified when the operation has completed.
    *
-   * @param completionHandler the handler to notify when close has completed
+   * @param completion the promise to signal when close has completed
    */
-  void close(Handler<AsyncResult<Void>> completionHandler);
+  void close(Promise<Void> completion);
 }

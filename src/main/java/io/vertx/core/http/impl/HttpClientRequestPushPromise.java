@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -42,7 +42,7 @@ class HttpClientRequestPushPromise extends HttpClientRequestBase {
       String host,
       int port,
       MultiMap headers) {
-    super(client, ssl, method, SocketAddress.inetSocketAddress(port, host), host, port, uri);
+    super(client, conn.getContext(), ssl, method, SocketAddress.inetSocketAddress(port, host), host, port, uri);
     this.conn = conn;
     this.stream = new Http2ClientConnection.Http2ClientStream(conn, conn.getContext(), this, stream, false);
     this.rawMethod = rawMethod;

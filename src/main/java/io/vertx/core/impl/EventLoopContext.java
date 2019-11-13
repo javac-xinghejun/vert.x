@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -16,8 +16,6 @@ import io.vertx.core.Handler;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.spi.tracing.VertxTracer;
-
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -36,8 +34,14 @@ public class EventLoopContext extends ContextImpl {
     super(vertx, tracer, eventLoop, internalBlockingPool, workerPool, deployment, tccl);
   }
 
-  void executeAsync(Handler<Void> task) {
-    nettyEventLoop().execute(() -> dispatch(null, task));
+  @Override
+  <T> void execute(T argument, Handler<T> task) {
+    nettyEventLoop().execute(() -> dispatch(argument, task));
+  }
+
+  @Override
+  public void execute(Runnable task) {
+    nettyEventLoop().execute(() -> dispatch(task));
   }
 
   @Override
@@ -46,8 +50,29 @@ public class EventLoopContext extends ContextImpl {
   }
 
   @Override
-  <T> void execute(T value, Handler<T> task) {
-    dispatch(value, task);
+  public <T> void emitFromIO(T event, Handler<T> handler) {
+    if (THREAD_CHECKS) {
+      checkEventLoopThread();
+    }
+    dispatch(event, handler);
+  }
+
+  @Override
+  public <T> void emit(T event, Handler<T> handler) {
+    emit(this, event, handler);
+  }
+
+  private static <T> void emit(AbstractContext ctx, T value, Handler<T> task) {
+    EventLoop eventLoop = ctx.nettyEventLoop();
+    if (eventLoop.inEventLoop()) {
+      if (AbstractContext.context() == ctx) {
+        ctx.dispatch(value, task);
+      } else {
+        ctx.emitFromIO(value, task);
+      }
+    } else {
+      ctx.execute(value, task);
+    }
   }
 
   @Override
@@ -66,13 +91,27 @@ public class EventLoopContext extends ContextImpl {
       super(delegate, other);
     }
 
-    void executeAsync(Handler<Void> task) {
-      nettyEventLoop().execute(() -> dispatch(null, task));
+    @Override
+    <T> void execute(T argument, Handler<T> task) {
+      nettyEventLoop().execute(() -> dispatch(argument, task));
     }
 
     @Override
-    <T> void execute(T value, Handler<T> task) {
-      dispatch(value, task);
+    public void execute(Runnable task) {
+      nettyEventLoop().execute(() -> dispatch(task));
+    }
+
+    @Override
+    public <T> void emitFromIO(T event, Handler<T> handler) {
+      if (THREAD_CHECKS) {
+        checkEventLoopThread();
+      }
+      dispatch(event, handler);
+    }
+
+    @Override
+    public <T> void emit(T event, Handler<T> handler) {
+      EventLoopContext.emit(this, event, handler);
     }
 
     @Override

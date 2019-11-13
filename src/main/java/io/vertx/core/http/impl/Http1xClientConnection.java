@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -210,7 +210,7 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
     StreamImpl(ContextInternal context, Http1xClientConnection conn, int id, Handler<AsyncResult<HttpClientStream>> handler) {
       this.context = context;
       this.conn = conn;
-      this.promise = Promise.promise();
+      this.promise = context.promise();
       this.id = id;
       this.queue = new InboundBuffer<>(context, 5);
 
@@ -298,8 +298,7 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
       }
     }
 
-    private void sendRequest(
-      HttpRequest request, ByteBuf buf, boolean end, Handler<AsyncResult<Void>> handler) {
+    private void sendRequest(HttpRequest request, ByteBuf buf, boolean end, Handler<AsyncResult<Void>> handler) {
       if (end) {
         if (buf != null) {
           request = new AssembledFullHttpRequest(request, buf);
@@ -311,7 +310,7 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
           request = new AssembledHttpRequest(request, buf);
         }
       }
-      conn.writeToChannel(request, conn.toPromise(handler));
+      conn.writeToChannel(request, handler == null ? null : context.promise(handler));
     }
 
     private boolean handleChunk(Buffer buff) {
@@ -335,7 +334,7 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
         msg = new DefaultHttpContent(buff);
       }
       bytesWritten += msg.content().readableBytes();
-      conn.writeToChannel(msg, conn.toPromise(handler));
+      conn.writeToChannel(msg, handler == null ? null : context.promise(handler));
     }
 
     @Override
@@ -719,7 +718,8 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
         nettyHeaders,
         maxWebSocketFrameSize,
         !options.isSendUnmaskedFrames(),
-        false);
+        false,
+        -1);
 
       WebSocketHandshakeInboundHandler handshakeInboundHandler = new WebSocketHandshakeInboundHandler(handshaker, ar -> {
         AsyncResult<WebSocket> wsRes = ar.map(v -> {
@@ -736,14 +736,18 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
           ws.registerHandler(vertx.eventBus());
 
         }
-        getContext().executeFromIO(wsRes, res -> {
+        getContext().emitFromIO(wsRes, res -> {
           if (res.succeeded()) {
             log.debug("WebSocket handshake complete");
             if (metrics != null) {
               ws.setMetric(metrics.connected(endpointMetric, metric(), ws));
             }
+            ws.headers(ar.result());
           }
           wsHandler.handle(res);
+          if (res.succeeded()) {
+            ws.headers(null);
+          }
         });
       });
       p.addBefore("handler", "handshakeCompleter", handshakeInboundHandler);
@@ -843,15 +847,14 @@ class Http1xClientConnection extends Http1xConnectionBase<WebSocketImpl> impleme
   public void createStream(ContextInternal context, Handler<AsyncResult<HttpClientStream>> handler) {
     StreamImpl stream;
     synchronized (this) {
-      ContextInternal sub = getContext().duplicate(context);
-      stream = new StreamImpl(sub, this, seq++, handler);
+      stream = new StreamImpl(context, this, seq++, handler);
       if (requestInProgress != null) {
         requestInProgress.append(stream);
         return;
       }
       requestInProgress = stream;
     }
-    stream.context.dispatch(Future.succeededFuture(stream), stream.promise);
+    stream.promise.complete(stream);
   }
 
   private void recycle() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -15,6 +15,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.handler.codec.http2.Http2Stream;
 import io.netty.util.CharsetUtil;
+import io.netty.util.concurrent.FutureListener;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
@@ -174,7 +175,7 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   @Override
   public Future<Void> write(Buffer data) {
     synchronized (conn) {
-      Promise<Void> promise = Promise.promise();
+      Promise<Void> promise = context.promise();
       writeData(data.getByteBuf(), false, promise);
       return promise.future();
     }
@@ -212,7 +213,7 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   public Future<Void> write(String str) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(str, null, promise);
     return promise.future();
   }
@@ -224,7 +225,7 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   public Future<Void> write(String str, String enc) {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     write(str, enc, promise);
     return promise.future();
   }
@@ -237,7 +238,15 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   public void write(Buffer message, Handler<AsyncResult<Void>> handler) {
-    conn.handler.writeData(stream, message.getByteBuf(), false, handler);
+    FutureListener<Void> promise = handler == null ? null : context.promise(handler);
+    conn.handler.writeData(stream, message.getByteBuf(), false, promise);
+  }
+
+  @Override
+  public Future<Void> sendFile(String filename, long offset, long length) {
+    Promise<Void> promise = context.promise();
+    sendFile(filename, offset, length, promise);
+    return promise.future();
   }
 
   @Override
@@ -269,7 +278,7 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
       long contentLength = Math.min(length, file.length() - offset);
 
-      Promise<Long> result = Promise.promise();
+      Promise<Long> result = context.promise();
       result.future().setHandler(ar -> {
         if (resultHandler != null) {
           resultCtx.runOnContext(v -> {
@@ -306,7 +315,7 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
 
   @Override
   public Future<Void> end() {
-    Promise<Void> promise = Promise.promise();
+    Promise<Void> promise = context.promise();
     end(promise);
     return promise.future();
   }
@@ -353,6 +362,16 @@ class VertxHttp2NetSocket<C extends Http2ConnectionBase> extends VertxHttp2Strea
   @Override
   public NetSocket upgradeToSsl(String serverName, Handler<AsyncResult<Void>> handler) {
     throw new UnsupportedOperationException("Cannot upgrade HTTP/2 stream to SSL");
+  }
+
+  @Override
+  public Future<Void> upgradeToSsl() {
+    return Future.failedFuture("Cannot upgrade HTTP/2 stream to SSL");
+  }
+
+  @Override
+  public Future<Void> upgradeToSsl(String serverName) {
+    return Future.failedFuture("Cannot upgrade HTTP/2 stream to SSL");
   }
 
   @Override

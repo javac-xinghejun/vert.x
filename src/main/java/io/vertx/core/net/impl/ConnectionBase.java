@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -15,8 +15,10 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.stream.ChunkedFile;
+import io.netty.util.concurrent.FutureListener;
 import io.vertx.core.*;
 import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -60,6 +62,8 @@ public abstract class ConnectionBase {
   private Handler<Void> closeHandler;
   private int writeInProgress;
   private Object metric;
+  private SocketAddress remoteAddress;
+  private SocketAddress localAddress;
 
   // State accessed exclusively from the event loop thread
   private boolean read;
@@ -122,28 +126,14 @@ public abstract class ConnectionBase {
     }
   }
 
-  /**
-   * Provide a promise that will call the {@code handler} upon completion.
-   * When the {@code handler} is {@code null} {@link #voidPromise} is returned.
-   *
-   * @param handler the handler
-   * @return a promise
-   */
-  public final ChannelPromise toPromise(Handler<AsyncResult<Void>> handler) {
-    return handler == null ? voidPromise : wrap(handler);
+  private ChannelPromise wrap(FutureListener<Void> handler) {
+    ChannelPromise promise = chctx.newPromise();
+    promise.addListener(handler);
+    return promise;
   }
 
-  private ChannelPromise wrap(Handler<AsyncResult<Void>> handler) {
-    ChannelPromise promise = chctx.newPromise();
-    promise.addListener((fut) -> {
-        if (fut.isSuccess()) {
-          handler.handle(Future.succeededFuture());
-        } else {
-          handler.handle(Future.failedFuture(fut.cause()));
-        }
-      }
-    );
-    return promise;
+  public void writeToChannel(Object msg, FutureListener<Void> listener) {
+    writeToChannel(msg, listener == null ? voidPromise : wrap(listener));
   }
 
   public void writeToChannel(Object msg, ChannelPromise promise) {
@@ -210,25 +200,22 @@ public abstract class ConnectionBase {
    * Close the connection
    */
   public Future<Void> close() {
-    Promise<Void> promise = Promise.promise();
-    close(promise);
+    PromiseInternal<Void> promise = context.promise();
+    // make sure everything is flushed out on close
+    ChannelPromise channelPromise = chctx
+      .newPromise()
+      .addListener((ChannelFutureListener) f -> {
+        chctx.channel().close().addListener(promise);
+      });
+    flush(channelPromise);
     return promise.future();
   }
 
   /**
    * Close the connection and notifies the {@code handler}
    */
-  public void close(Handler<AsyncResult<Void>> handler) {
-    // make sure everything is flushed out on close
-    ChannelPromise promise = chctx
-      .newPromise()
-      .addListener((ChannelFutureListener) f -> {
-      ChannelFuture closeFut = chctx.channel().close();
-      if (handler != null) {
-        closeFut.addListener(new ChannelFutureListenerAdapter<>(context, null, handler));
-      }
-    });
-    flush(promise);
+  public final void close(Handler<AsyncResult<Void>> handler) {
+    close().setHandler(handler);
   }
 
   public synchronized ConnectionBase closeHandler(Handler<Void> handler) {
@@ -439,19 +426,27 @@ public abstract class ConnectionBase {
   }
 
   public SocketAddress remoteAddress() {
-    java.net.SocketAddress addr = chctx.channel().remoteAddress();
-    if (addr != null) {
-      return vertx.transport().convert(addr);
+    SocketAddress address = remoteAddress;
+    if (address == null) {
+      java.net.SocketAddress addr = chctx.channel().remoteAddress();
+      if (addr != null) {
+        address = vertx.transport().convert(addr);
+        remoteAddress = address;
+      }
     }
-    return null;
+    return address;
   }
 
   public SocketAddress localAddress() {
-    java.net.SocketAddress addr = chctx.channel().localAddress();
-    if (addr != null) {
-      return vertx.transport().convert(addr);
+    SocketAddress address = localAddress;
+    if (address == null) {
+      java.net.SocketAddress addr = chctx.channel().localAddress();
+      if (addr != null) {
+        address = vertx.transport().convert(addr);
+        localAddress = address;
+      }
     }
-    return null;
+    return address;
   }
 
   public void handleMessage(Object msg) {

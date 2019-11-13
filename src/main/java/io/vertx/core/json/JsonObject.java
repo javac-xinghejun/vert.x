@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -14,11 +14,14 @@ import io.vertx.codegen.annotations.Fluent;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.shareddata.Shareable;
 import io.vertx.core.shareddata.impl.ClusterSerializable;
+import io.vertx.core.spi.json.JsonCodec;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import static java.time.format.DateTimeFormatter.ISO_INSTANT;
 
@@ -104,7 +107,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
     if (obj == null) {
       return null;
     } else {
-      return new JsonObject((Map<String, Object>) Json.mapper.convertValue(obj, Map.class));
+      return new JsonObject((Map<String, Object>) Json.CODEC.fromValue(obj, Map.class));
     }
   }
 
@@ -118,7 +121,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    *          if the type cannot be instantiated.
    */
   public <T> T mapTo(Class<T> type) {
-    return Json.mapper.convertValue(map, type);
+    return Json.CODEC.fromValue(map, type);
   }
 
   /**
@@ -514,7 +517,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
   /**
    * Put an Enum into the JSON object with the specified key.
    * <p>
-   * JSON has no concept of encoding Enums, so the Enum will be converted to a String using the {@link java.lang.Enum#name}
+   * JSON has no concept of encoding Enums, so the Enum will be converted to a String using the {@link java.lang.Enum#name()}
    * method and the value put as a String.
    *
    * @param key  the key
@@ -696,7 +699,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    */
   public JsonObject put(String key, Object value) {
     Objects.requireNonNull(key);
-    value = Json.checkAndCopy(value, false);
+    value = checkAndCopy(value, false);
     map.put(key, value);
     return this;
   }
@@ -779,7 +782,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    * @return the string encoding.
    */
   public String encode() {
-    return Json.encode(map);
+    return Json.CODEC.toString(this, false);
   }
 
   /**
@@ -789,7 +792,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    * @return the pretty string encoding.
    */
   public String encodePrettily() {
-    return Json.encodePrettily(map);
+    return Json.CODEC.toString(this, true);
   }
 
   /**
@@ -798,7 +801,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    * @return the buffer encoding.
    */
   public Buffer toBuffer() {
-    return Json.encodeToBuffer(map);
+    return Json.CODEC.toBuffer(this, false);
   }
 
   /**
@@ -816,7 +819,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
     }
     for (Map.Entry<String, Object> entry: map.entrySet()) {
       Object val = entry.getValue();
-      val = Json.checkAndCopy(val, true);
+      val = checkAndCopy(val, true);
       copiedMap.put(entry.getKey(), val);
     }
     return new JsonObject(copiedMap);
@@ -839,7 +842,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
    * @return a stream of the entries.
    */
   public Stream<Map.Entry<String, Object>> stream() {
-    return Json.asStream(iterator());
+    return asStream(iterator());
   }
 
   /**
@@ -892,7 +895,7 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
     return objectEquals(map, o);
   }
 
-  static boolean objectEquals(Map<?, ?> m1, Object o2) {
+  private static boolean objectEquals(Map<?, ?> m1, Object o2) {
     Map<?, ?> m2;
     if (o2 instanceof JsonObject) {
       m2 = ((JsonObject) o2).map;
@@ -901,26 +904,23 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
     } else {
       return false;
     }
-    if (m1.size() != m2.size())
+    if (!m1.keySet().equals(m2.keySet())) {
       return false;
+    }
     for (Map.Entry<?, ?> entry : m1.entrySet()) {
-      Object val = entry.getValue();
-      if (val == null) {
-        if (m2.get(entry.getKey()) != null) {
-          return false;
-        }
-      } else {
-        if (!equals(entry.getValue(), m2.get(entry.getKey()))) {
-          return false;
-        }
+      Object val1 = entry.getValue();
+      Object val2 = m2.get(entry.getKey());
+      if (val1 == null ? val2 != null : !equals(val1, val2)) {
+        return false;
       }
     }
     return true;
   }
 
   static boolean equals(Object o1, Object o2) {
-    if (o1 == o2)
+    if (o1 == o2) {
       return true;
+    }
     if (o1 instanceof JsonObject) {
       return objectEquals(((JsonObject) o1).map, o2);
     }
@@ -968,11 +968,11 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
   }
 
   private void fromJson(String json) {
-    map = Json.decodeValue(json, Map.class);
+    map = Json.CODEC.fromString(json, Map.class);
   }
 
   private void fromBuffer(Buffer buf) {
-    map = Json.decodeValue(buf, Map.class);
+    map = Json.CODEC.fromBuffer(buf, Map.class);
   }
 
   private class Iter implements Iterator<Map.Entry<String, Object>> {
@@ -1029,4 +1029,54 @@ public class JsonObject implements Iterable<Map.Entry<String, Object>>, ClusterS
       throw new UnsupportedOperationException();
     }
   }
+
+  @SuppressWarnings("unchecked")
+  static Object checkAndCopy(Object val, boolean copy) {
+    if (val == null) {
+      // OK
+    } else if (val instanceof Number && !(val instanceof BigDecimal)) {
+      // OK
+    } else if (val instanceof Boolean) {
+      // OK
+    } else if (val instanceof String) {
+      // OK
+    } else if (val instanceof Character) {
+      // OK
+    } else if (val instanceof CharSequence) {
+      val = val.toString();
+    } else if (val instanceof JsonObject) {
+      if (copy) {
+        val = ((JsonObject) val).copy();
+      }
+    } else if (val instanceof JsonArray) {
+      if (copy) {
+        val = ((JsonArray) val).copy();
+      }
+    } else if (val instanceof Map) {
+      if (copy) {
+        val = (new JsonObject((Map)val)).copy();
+      } else {
+        val = new JsonObject((Map)val);
+      }
+    } else if (val instanceof List) {
+      if (copy) {
+        val = (new JsonArray((List)val)).copy();
+      } else {
+        val = new JsonArray((List)val);
+      }
+    } else if (val instanceof byte[]) {
+      val = Base64.getEncoder().encodeToString((byte[])val);
+    } else if (val instanceof Instant) {
+      val = ISO_INSTANT.format((Instant) val);
+    } else {
+      throw new IllegalStateException("Illegal type in JsonObject: " + val.getClass());
+    }
+    return val;
+  }
+
+  static <T> Stream<T> asStream(Iterator<T> sourceIterator) {
+    Iterable<T> iterable = () -> sourceIterator;
+    return StreamSupport.stream(iterable.spliterator(), false);
+  }
+
 }
