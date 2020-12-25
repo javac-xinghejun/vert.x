@@ -54,11 +54,29 @@ public class NetServerOptions extends TCPSSLOptions {
    */
   public static final boolean DEFAULT_SNI = false;
 
+  /**
+   * Default value of whether the server supports HA PROXY protocol = false
+   */
+  public static final boolean DEFAULT_USE_PROXY_PROTOCOL = false;
+
+  /**
+   * The default value of HA PROXY protocol timeout = 10
+   */
+  public static final long DEFAULT_PROXY_PROTOCOL_TIMEOUT = 10L;
+
+  /**
+   * Default HA PROXY protocol time unit = SECONDS
+   */
+  public static final TimeUnit DEFAULT_PROXY_PROTOCOL_TIMEOUT_TIME_UNIT = TimeUnit.SECONDS;
+
   private int port;
   private String host;
   private int acceptBacklog;
   private ClientAuth clientAuth;
   private boolean sni;
+  private boolean useProxyProtocol;
+  private long proxyProtocolTimeout;
+  private TimeUnit proxyProtocolTimeoutUnit;
 
   /**
    * Default constructor
@@ -80,6 +98,11 @@ public class NetServerOptions extends TCPSSLOptions {
     this.acceptBacklog = other.getAcceptBacklog();
     this.clientAuth = other.getClientAuth();
     this.sni = other.isSni();
+    this.useProxyProtocol = other.isUseProxyProtocol();
+    this.proxyProtocolTimeout = other.proxyProtocolTimeout;
+    this.proxyProtocolTimeoutUnit = other.getProxyProtocolTimeoutUnit() != null ?
+      other.getProxyProtocolTimeoutUnit() :
+      DEFAULT_PROXY_PROTOCOL_TIMEOUT_TIME_UNIT;
   }
 
   /**
@@ -390,11 +413,68 @@ public class NetServerOptions extends TCPSSLOptions {
     return this;
   }
 
+  /**
+   * @return whether the server uses the HA Proxy protocol
+   */
+  public boolean isUseProxyProtocol() { return useProxyProtocol; }
+
+  /**
+   * Set whether the server uses the HA Proxy protocol
+   *
+   * @return a reference to this, so the API can be used fluently
+   */
+  public NetServerOptions setUseProxyProtocol(boolean useProxyProtocol) {
+    this.useProxyProtocol = useProxyProtocol;
+    return this;
+  }
+
+  /**
+   * @return the Proxy protocol timeout, in time unit specified by {@link #getProxyProtocolTimeoutUnit()}.
+   */
+  public long getProxyProtocolTimeout() {
+    return proxyProtocolTimeout;
+  }
+
+  /**
+   * Set the Proxy protocol timeout, default time unit is seconds.
+   *
+   * @param proxyProtocolTimeout the Proxy protocol timeout to set
+   * @return a reference to this, so the API can be used fluently
+   */
+  public NetServerOptions setProxyProtocolTimeout(long proxyProtocolTimeout) {
+    if (proxyProtocolTimeout < 0) {
+      throw new IllegalArgumentException("proxyProtocolTimeout must be >= 0");
+    }
+    this.proxyProtocolTimeout = proxyProtocolTimeout;
+    return this;
+  }
+
+  /**
+   * Set the Proxy protocol timeout unit. If not specified, default is seconds.
+   *
+   * @param proxyProtocolTimeoutUnit specify time unit.
+   * @return a reference to this, so the API can be used fluently
+   */
+  public NetServerOptions setProxyProtocolTimeoutUnit(TimeUnit proxyProtocolTimeoutUnit) {
+    this.proxyProtocolTimeoutUnit = proxyProtocolTimeoutUnit;
+    return this;
+  }
+
+  /**
+   * @return the Proxy protocol timeout unit.
+   */
+  public TimeUnit getProxyProtocolTimeoutUnit() {
+    return proxyProtocolTimeoutUnit;
+  }
+
   private void init() {
     this.port = DEFAULT_PORT;
     this.host = DEFAULT_HOST;
     this.acceptBacklog = DEFAULT_ACCEPT_BACKLOG;
     this.clientAuth = DEFAULT_CLIENT_AUTH;
     this.sni = DEFAULT_SNI;
+    this.useProxyProtocol = DEFAULT_USE_PROXY_PROTOCOL;
+    this.proxyProtocolTimeout = DEFAULT_PROXY_PROTOCOL_TIMEOUT;
+    this.proxyProtocolTimeoutUnit = DEFAULT_PROXY_PROTOCOL_TIMEOUT_TIME_UNIT;
   }
 }

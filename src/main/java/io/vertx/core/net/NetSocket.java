@@ -32,7 +32,7 @@ import javax.security.cert.X509Certificate;
  * when a server accepts a connection.
  * <p>
  * It implements both {@link ReadStream} and {@link WriteStream} so it can be used with
- * {@link io.vertx.core.streams.Pump} to pump data with flow control.
+ * {@link io.vertx.core.streams.Pipe} to pipe data with flow control.
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
@@ -189,13 +189,15 @@ public interface NetSocket extends ReadStream<Buffer>, WriteStream<Buffer> {
   NetSocket sendFile(String filename, long offset, long length, Handler<AsyncResult<Void>> resultHandler);
 
   /**
-   * @return the remote address for this socket
+   * @return the remote address for this connection, possibly {@code null} (e.g a server bound on a domain socket).
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the actual connecting client.
    */
   @CacheReturn
   SocketAddress remoteAddress();
 
   /**
-   * @return the local address for this socket
+   * @return the local address for this connection, possibly {@code null} (e.g a server bound on a domain socket)
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the proxy.
    */
   @CacheReturn
   SocketAddress localAddress();

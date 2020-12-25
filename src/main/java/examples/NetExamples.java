@@ -263,6 +263,16 @@ public class NetExamples {
     NetServer server = vertx.createNetServer(options);
   }
 
+  public void exampleBKS(Vertx vertx) {
+    NetServerOptions options = new NetServerOptions().setSsl(true).setKeyCertOptions(
+      new KeyStoreOptions().
+        setType("BKS").
+        setPath("/path/to/your/server-keystore.bks").
+        setPassword("password-of-your-keystore")
+    );
+    NetServer server = vertx.createNetServer(options);
+  }
+
   // SSL/TLS server trust
 
   public void example23(Vertx vertx) {
@@ -596,6 +606,18 @@ public class NetExamples {
       .setTrustOptions(certificate.trustOptions()))
       .requestHandler(req -> req.response().end("Hello!"))
       .listen(8080);
+  }
+
+  public void example51(Vertx vertx) {
+    NetServerOptions options = new NetServerOptions().setUseProxyProtocol(true);
+    NetServer server = vertx.createNetServer(options);
+    server.connectHandler(so -> {
+      // Print the actual client address provided by the HA proxy protocol instead of the proxy address
+      System.out.println(so.remoteAddress());
+
+      // Print the address of the proxy
+      System.out.println(so.localAddress());
+    });
   }
 
   public void configureSNIServer(Vertx vertx) {

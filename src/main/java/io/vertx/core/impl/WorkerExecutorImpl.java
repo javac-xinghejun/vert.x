@@ -13,6 +13,7 @@ package io.vertx.core.impl;
 
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.*;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.spi.metrics.Metrics;
 import io.vertx.core.spi.metrics.MetricsProvider;
 import io.vertx.core.spi.metrics.PoolMetrics;
@@ -22,12 +23,14 @@ import io.vertx.core.spi.metrics.PoolMetrics;
  */
 class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
 
-  private final ContextInternal ctx;
+  private final VertxInternal vertx;
+  private final CloseHooks closeHooks;
   private final VertxImpl.SharedWorkerPool pool;
   private boolean closed;
 
-  public WorkerExecutorImpl(ContextInternal ctx, VertxImpl.SharedWorkerPool pool) {
-    this.ctx = ctx;
+  public WorkerExecutorImpl(VertxInternal vertx, CloseHooks closeHooks, VertxImpl.SharedWorkerPool pool) {
+    this.vertx = vertx;
+    this.closeHooks = closeHooks;
     this.pool = pool;
   }
 
@@ -44,7 +47,7 @@ class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
 
   @Override
   public Vertx vertx() {
-    return ctx.owner();
+    return vertx;
   }
 
   @Override
@@ -57,23 +60,28 @@ class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
     if (closed) {
       throw new IllegalStateException("Worker executor closed");
     }
-    ContextInternal context = (ContextInternal) ctx.owner().getOrCreateContext();
-    ContextImpl impl = context instanceof ContextImpl.Duplicated ? ((ContextImpl.Duplicated)context).delegate : (ContextImpl) context;
+    ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+    ContextImpl impl = context instanceof DuplicatedContext ? ((DuplicatedContext)context).delegate : (ContextImpl) context;
     return ContextImpl.executeBlocking(context, blockingCodeHandler, pool, ordered ? impl.orderedTasks : null);
   }
 
   public synchronized <T> void executeBlocking(Handler<Promise<T>> blockingCodeHandler, boolean ordered, Handler<AsyncResult<T>> asyncResultHandler) {
     Future<T> fut = executeBlocking(blockingCodeHandler, ordered);
     if (asyncResultHandler != null) {
-      fut.setHandler(asyncResultHandler);
+      fut.onComplete(asyncResultHandler);
     }
   }
 
   @Override
   public Future<Void> close() {
-    PromiseInternal<Void> promise = ctx.promise();
+    PromiseInternal<Void> promise = vertx.promise();
     close(promise);
     return promise.future();
+  }
+
+  @Override
+  public void close(Handler<AsyncResult<Void>> handler) {
+    close().onComplete(handler);
   }
 
   @Override
@@ -81,7 +89,7 @@ class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
     synchronized (this) {
       if (!closed) {
         closed = true;
-        ctx.removeCloseHook(this);
+        closeHooks.remove(this);
         pool.release();
       }
     }

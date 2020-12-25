@@ -11,15 +11,21 @@
 
 package io.vertx.core.http.impl;
 
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.ChannelGroupFuture;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.vertx.core.Closeable;
 import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
-import io.vertx.core.VertxException;
 import io.vertx.core.*;
 import io.vertx.core.http.*;
+import io.vertx.core.impl.CloseFuture;
+import io.vertx.core.impl.EventLoopContext;
+import io.vertx.core.net.impl.clientconnection.ConnectionManager;
 import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -27,35 +33,41 @@ import io.vertx.core.net.ProxyOptions;
 import io.vertx.core.net.ProxyType;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.net.impl.SSLHelper;
+import io.vertx.core.net.impl.clientconnection.Endpoint;
+import io.vertx.core.spi.metrics.ClientMetrics;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
 import io.vertx.core.spi.metrics.Metrics;
 import io.vertx.core.spi.metrics.MetricsProvider;
 
-import java.net.MalformedURLException;
+import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.URL;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  *
- * This class is thread-safe
+ * This class is thread-safe.
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
-public class HttpClientImpl implements HttpClient, MetricsProvider {
+public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
 
-  private final Function<HttpClientResponse, Future<HttpClientRequest>> DEFAULT_HANDLER = resp -> {
+  // Pattern to check we are not dealing with an absoluate URI
+  private static final Pattern ABS_URI_START_PATTERN = Pattern.compile("^\\p{Alpha}[\\p{Alpha}\\p{Digit}+.\\-]*:");
+
+  private static final Function<HttpClientResponse, Future<RequestOptions>> DEFAULT_HANDLER = resp -> {
     try {
       int statusCode = resp.statusCode();
       String location = resp.getHeader(HttpHeaders.LOCATION);
       if (location != null && (statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308)) {
-        HttpMethod m = resp.request().method();
+        HttpMethod m = resp.request().getMethod();
         if (statusCode == 303) {
           m = HttpMethod.GET;
         } else if (m != HttpMethod.GET && m != HttpMethod.HEAD) {
@@ -80,11 +92,20 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
           return null;
         }
         String requestURI = uri.getPath();
+        if (requestURI == null || requestURI.isEmpty()) {
+          requestURI = "/";
+        }
         String query = uri.getQuery();
         if (query != null) {
           requestURI += "?" + query;
         }
-        return Future.succeededFuture(createRequest(m, null, uri.getHost(), port, ssl, requestURI, null));
+        RequestOptions options = new RequestOptions();
+        options.setMethod(m);
+        options.setHost(uri.getHost());
+        options.setPort(port);
+        options.setSsl(ssl);
+        options.setURI(requestURI);
+        return Future.succeededFuture(options);
       }
       return null;
     } catch (Exception e) {
@@ -93,26 +114,31 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
   };
 
   private static final Logger log = LoggerFactory.getLogger(HttpClientImpl.class);
+  private static final Consumer<Endpoint<HttpClientConnection>> EXPIRED_CHECKER = endpoint -> ((ClientHttpStreamEndpoint)endpoint).checkExpired();
+
 
   private final VertxInternal vertx;
+  private final ChannelGroup channelGroup;
   private final HttpClientOptions options;
-  private final ContextInternal context;
-  private final ConnectionManager websocketCM; // The queue manager for websockets
-  private final ConnectionManager httpCM; // The queue manager for requests
-  private final Closeable closeHook;
+  private final ConnectionManager<EndpointKey, HttpClientConnection> webSocketCM;
+  private final ConnectionManager<EndpointKey, HttpClientConnection> httpCM;
   private final ProxyType proxyType;
   private final SSLHelper sslHelper;
+  private final SSLHelper webSocketSSLHelper;
   private final HttpClientMetrics metrics;
   private final boolean keepAlive;
   private final boolean pipelining;
-  private volatile boolean closed;
+  private final CloseFuture closeFuture;
+  private long timerID;
   private volatile Handler<HttpConnection> connectionHandler;
-  private volatile Function<HttpClientResponse, Future<HttpClientRequest>> redirectHandler = DEFAULT_HANDLER;
+  private volatile Function<HttpClientResponse, Future<RequestOptions>> redirectHandler = DEFAULT_HANDLER;
 
-  public HttpClientImpl(VertxInternal vertx, HttpClientOptions options) {
+  public HttpClientImpl(VertxInternal vertx, HttpClientOptions options, CloseFuture closeFuture) {
     this.vertx = vertx;
     this.metrics = vertx.metricsSPI() != null ? vertx.metricsSPI().createHttpClientMetrics(options) : null;
     this.options = new HttpClientOptions(options);
+    this.channelGroup = new DefaultChannelGroup(vertx.getAcceptorEventLoopGroup().next());
+    this.closeFuture = closeFuture;
     List<HttpVersion> alpnVersions = options.getAlpnVersions();
     if (alpnVersions == null || alpnVersions.isEmpty()) {
       switch (options.getProtocolVersion()) {
@@ -129,31 +155,107 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
     this.sslHelper = new SSLHelper(options, options.getKeyCertOptions(), options.getTrustOptions()).
         setApplicationProtocols(alpnVersions);
     sslHelper.validate(vertx);
-    context = vertx.getOrCreateContext();
-    closeHook = completionHandler -> {
-      HttpClientImpl.this.close();
-      completionHandler.handle(Future.succeededFuture());
-    };
-    if(options.getProtocolVersion() == HttpVersion.HTTP_2 && Context.isOnWorkerThread()) {
-      throw new IllegalStateException("Cannot use HttpClient with HTTP_2 in a worker");
-    }
-    if (context.deploymentID() != null) {
-      context.addCloseHook(closeHook);
-    }
+    this.webSocketSSLHelper = new SSLHelper(sslHelper).setUseAlpn(false);
     if (!keepAlive && pipelining) {
       throw new IllegalStateException("Cannot have pipelining with no keep alive");
     }
-    long maxWeight = options.getMaxPoolSize() * options.getHttp2MaxPoolSize();
-    websocketCM = new ConnectionManager(this, metrics, HttpVersion.HTTP_1_1, maxWeight, options.getMaxWaitQueueSize());
-
-    httpCM = new ConnectionManager(this, metrics, options.getProtocolVersion(), maxWeight, options.getMaxWaitQueueSize());
+    webSocketCM = webSocketConnectionManager();
+    httpCM = httpConnectionManager();
     proxyType = options.getProxyOptions() != null ? options.getProxyOptions().getType() : null;
-    httpCM.start();
-    websocketCM.start();
+    if (options.getPoolCleanerPeriod() > 0 && (options.getKeepAliveTimeout() > 0L || options.getHttp2KeepAliveTimeout() > 0L)) {
+      PoolChecker checker = new PoolChecker(this);
+      timerID = vertx.setTimer(options.getPoolCleanerPeriod(), checker);
+    }
   }
 
-  public ContextInternal context() {
-    return context;
+  /**
+   * A weak ref to the client so it can be finalized.
+   */
+  private static class PoolChecker implements Handler<Long> {
+
+    final WeakReference<HttpClientImpl> ref;
+
+    private PoolChecker(HttpClientImpl client) {
+      ref = new WeakReference<>(client);
+    }
+
+    @Override
+    public void handle(Long event) {
+      HttpClientImpl client = ref.get();
+      if (client != null) {
+        client.checkExpired(this);
+      }
+    }
+  }
+
+  private void checkExpired(Handler<Long> checker) {
+    httpCM.forEach(EXPIRED_CHECKER);
+    synchronized (this) {
+      if (!closeFuture.isClosed()) {
+        timerID = vertx.setTimer(options.getPoolCleanerPeriod(), checker);
+      }
+    }
+  }
+
+  private ConnectionManager<EndpointKey, HttpClientConnection> httpConnectionManager() {
+    long maxSize = options.getMaxPoolSize() * options.getHttp2MaxPoolSize();
+    int maxPoolSize = Math.max(options.getMaxPoolSize(), options.getHttp2MaxPoolSize());
+    return new ConnectionManager<>((key, ctx, dispose) -> {
+      String host;
+      int port;
+      if (key.serverAddr.isInetSocket()) {
+        host = key.serverAddr.host();
+        port = key.serverAddr.port();
+      } else {
+        host = key.serverAddr.path();
+        port = 0;
+      }
+      ClientMetrics metrics = this.metrics != null ? this.metrics.createEndpointMetrics(key.serverAddr, maxPoolSize) : null;
+      HttpChannelConnector connector = new HttpChannelConnector(this, channelGroup, ctx, metrics, options.getProtocolVersion(), key.ssl ? sslHelper : null, key.peerAddr, key.serverAddr);
+      return new ClientHttpStreamEndpoint(metrics, metrics, options.getMaxWaitQueueSize(), maxSize, host, port, ctx, connector, dispose);
+    });
+  }
+
+  private ConnectionManager<EndpointKey, HttpClientConnection> webSocketConnectionManager() {
+    int maxPoolSize = options.getMaxWebSockets();
+    return new ConnectionManager<>((key, ctx, dispose) -> {
+      String host;
+      int port;
+      if (key.serverAddr.isInetSocket()) {
+        host = key.serverAddr.host();
+        port = key.serverAddr.port();
+      } else {
+        host = key.serverAddr.path();
+        port = 0;
+      }
+      ClientMetrics metrics = this.metrics != null ? this.metrics.createEndpointMetrics(key.serverAddr, maxPoolSize) : null;
+      HttpChannelConnector connector = new HttpChannelConnector(this, channelGroup, ctx, metrics, HttpVersion.HTTP_1_1, key.ssl ? webSocketSSLHelper : null, key.peerAddr, key.serverAddr);
+      return new WebSocketEndpoint(null, port, host, metrics, maxPoolSize, connector, dispose);
+    });
+  }
+
+  private int getPort(RequestOptions request) {
+    Integer port = request.getPort();
+    if (port != null) {
+      return port;
+    }
+    SocketAddress server = request.getServer();
+    if (server != null && server.isInetSocket()) {
+      return server.port();
+    }
+    return options.getDefaultPort();
+  }
+
+  private String getHost(RequestOptions request) {
+    String host = request.getHost();
+    if (host != null) {
+      return host;
+    }
+    SocketAddress server = request.getServer();
+    if (server != null && server.isInetSocket()) {
+      return server.host();
+    }
+    return options.getDefaultHost();
   }
 
   HttpClientMetrics metrics() {
@@ -162,52 +264,65 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
 
   @Override
   public void webSocket(WebSocketConnectOptions connectOptions, Handler<AsyncResult<WebSocket>> handler) {
-    SocketAddress addr = SocketAddress.inetSocketAddress(connectOptions.getPort(), connectOptions.getHost());
-    websocketCM.getConnection(
-      context,
-      addr,
-      connectOptions.isSsl() != null ? connectOptions.isSsl() : options.isSsl(),
-      addr, ar -> {
+    webSocket(connectOptions, vertx.promise(handler));
+  }
+
+  private void webSocket(WebSocketConnectOptions connectOptions, PromiseInternal<WebSocket> promise) {
+    int port = getPort(connectOptions);
+    String host = getHost(connectOptions);
+    SocketAddress addr = SocketAddress.inetSocketAddress(port, host);
+    EndpointKey key = new EndpointKey(connectOptions.isSsl() != null ? connectOptions.isSsl() : options.isSsl(), addr, addr);
+    ContextInternal ctx = promise.context();
+    EventLoopContext eventLoopContext;
+    if (ctx instanceof EventLoopContext) {
+      eventLoopContext = (EventLoopContext) ctx;
+    } else {
+      eventLoopContext = (EventLoopContext) vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
+    }
+    webSocketCM.getConnection(
+      eventLoopContext,
+      key,
+      ar -> {
         if (ar.succeeded()) {
           Http1xClientConnection conn = (Http1xClientConnection) ar.result();
-          conn.toWebSocket(connectOptions.getURI(), connectOptions.getHeaders(), connectOptions.getVersion(), connectOptions.getSubProtocols(), HttpClientImpl.this.options.getMaxWebsocketFrameSize(), handler);
+          conn.toWebSocket(ctx, connectOptions.getURI(), connectOptions.getHeaders(), connectOptions.getVersion(), connectOptions.getSubProtocols(), HttpClientImpl.this.options.getMaxWebSocketFrameSize(), promise);
         } else {
-          context.schedule(v -> handler.handle(Future.failedFuture(ar.cause())));
+          promise.fail(ar.cause());
         }
       });
   }
 
   @Override
   public Future<WebSocket> webSocket(int port, String host, String requestURI) {
-    Promise<WebSocket> promise = context.promise();
+    Promise<WebSocket> promise = vertx.promise();
     webSocket(port, host, requestURI, promise);
     return promise.future();
   }
 
   @Override
   public Future<WebSocket> webSocket(String host, String requestURI) {
-    Promise<WebSocket> promise = context.promise();
+    Promise<WebSocket> promise = vertx.promise();
     webSocket(host, requestURI, promise);
     return promise.future();
   }
 
   @Override
   public Future<WebSocket> webSocket(String requestURI) {
-    Promise<WebSocket> promise = context.promise();
+    Promise<WebSocket> promise = vertx.promise();
     webSocket(requestURI, promise);
     return promise.future();
   }
 
   @Override
   public Future<WebSocket> webSocket(WebSocketConnectOptions options) {
-    Promise<WebSocket> promise = context.promise();
+    Promise<WebSocket> promise = vertx.promise();
     webSocket(options, promise);
     return promise.future();
   }
 
   @Override
   public Future<WebSocket> webSocketAbs(String url, MultiMap headers, WebsocketVersion version, List<String> subProtocols) {
-    Promise<WebSocket> promise = context.promise();
+    Promise<WebSocket> promise = vertx.promise();
     webSocketAbs(url, headers, version, subProtocols, promise);
     return promise.future();
   }
@@ -263,425 +378,98 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
   }
 
   @Override
-  public HttpClientRequest requestAbs(HttpMethod method, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(method, null, absoluteURI, responseHandler);
+  public void request(RequestOptions options, Handler<AsyncResult<HttpClientRequest>> handler) {
+    ContextInternal ctx = vertx.getOrCreateContext();
+    PromiseInternal<HttpClientRequest> promise = ctx.promise(handler);
+    request(options, promise);
   }
 
   @Override
-  public HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    Objects.requireNonNull(responseHandler, "no null responseHandler accepted");
-    return requestAbs(method, serverAddress, absoluteURI).setHandler(responseHandler);
+  public Future<HttpClientRequest> request(RequestOptions options) {
+    ContextInternal ctx = vertx.getOrCreateContext();
+    PromiseInternal<HttpClientRequest> promise = ctx.promise();
+    request(options, promise);
+    return promise.future();
+  }
+
+  private void request(RequestOptions options, PromiseInternal<HttpClientRequest> promise) {
+    request(options.getMethod(), options.getServer(), getHost(options), getPort(options), options.isSsl(), options.getURI(), options.getHeaders(), options.getTimeout(), options.getFollowRedirects(), promise);
   }
 
   @Override
-  public HttpClientRequest get(RequestOptions options) {
-    return request(HttpMethod.GET, options);
+  public void request(HttpMethod method, int port, String host, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler) {
+    ContextInternal ctx = vertx.getOrCreateContext();
+    PromiseInternal<HttpClientRequest> promise = ctx.promise(handler);
+    request(method, port, host, requestURI, promise);
   }
 
   @Override
-  public HttpClientRequest request(HttpMethod method, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    Objects.requireNonNull(responseHandler, "no null responseHandler accepted");
-    return request(method, port, host, requestURI).setHandler(responseHandler);
+  public Future<HttpClientRequest> request(HttpMethod method, int port, String host, String requestURI) {
+    ContextInternal ctx = vertx.getOrCreateContext();
+    PromiseInternal<HttpClientRequest> promise = ctx.promise();
+    request(method, port, host, requestURI, promise);
+    return promise.future();
+  }
+
+  private void request(HttpMethod method, int port, String host, String requestURI, PromiseInternal<HttpClientRequest> promise) {
+    request(method, null, host, port, null, requestURI, null, 0L, null, promise);
   }
 
   @Override
-  public HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    Objects.requireNonNull(responseHandler, "no null responseHandler accepted");
-    return request(method, serverAddress, port, host, requestURI).setHandler(responseHandler);
+  public void request(HttpMethod method, String host, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler) {
+    request(method, options.getDefaultPort(), host, requestURI, handler);
   }
 
   @Override
-  public HttpClientRequest request(HttpMethod method, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(method, options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, String requestURI) {
-    return request(method, options.getDefaultPort(), options.getDefaultHost(), requestURI);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(method, options.getDefaultPort(), options.getDefaultHost(), requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest requestAbs(HttpMethod method, String absoluteURI) {
-    return requestAbs(method, null, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI) {
-    URL url = parseUrl(absoluteURI);
-    Boolean ssl = false;
-    int port = url.getPort();
-    String relativeUri = url.getPath().isEmpty() ? "/" + url.getFile() : url.getFile();
-    String protocol = url.getProtocol();
-    if ("ftp".equals(protocol)) {
-      if (port == -1) {
-        port = 21;
-      }
-    } else {
-      char chend = protocol.charAt(protocol.length() - 1);
-      if (chend == 'p') {
-        if (port == -1) {
-          port = 80;
-        }
-      } else if (chend == 's'){
-        ssl = true;
-        if (port == -1) {
-          port = 443;
-        }
-      }
-    }
-    // if we do not know the protocol, the port still may be -1, we will handle that below
-    return createRequest(method, serverAddress, protocol, url.getHost(), port, ssl, relativeUri, null);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, int port, String host, String requestURI) {
-    return createRequest(method, null, host, port, null, requestURI, null);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI) {
-    return createRequest(method, serverAddress, host, port, null, requestURI, null);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(method, options).setHandler(responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(method, serverAddress, options).setHandler(responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options) {
-    return createRequest(method, serverAddress, options.getHost(), options.getPort(), options.isSsl(), options.getURI(), null);
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, RequestOptions options) {
-    return createRequest(method, null, options.getHost(), options.getPort(), options.isSsl(), options.getURI(), options.getHeaders());
-  }
-
-  @Override
-  public HttpClientRequest request(HttpMethod method, String host, String requestURI) {
+  public Future<HttpClientRequest> request(HttpMethod method, String host, String requestURI) {
     return request(method, options.getDefaultPort(), host, requestURI);
   }
 
   @Override
-  public HttpClientRequest get(int port, String host, String requestURI) {
-    return request(HttpMethod.GET, port, host, requestURI);
+  public void request(HttpMethod method, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler) {
+    request(method, options.getDefaultPort(), options.getDefaultHost(), requestURI, handler);
   }
 
   @Override
-  public HttpClientRequest get(String host, String requestURI) {
-    return get(options.getDefaultPort(), host, requestURI);
+  public Future<HttpClientRequest> request(HttpMethod method, String requestURI) {
+    return request(method, options.getDefaultPort(), options.getDefaultHost(), requestURI);
   }
 
   @Override
-  public HttpClientRequest get(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.GET, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest get(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.GET, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest get(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return get(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest get(String requestURI) {
-    return request(HttpMethod.GET, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest get(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.GET, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest getAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.GET, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest getAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.GET, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest post(RequestOptions options) {
-    return request(HttpMethod.POST, options);
-  }
-
-  @Override
-  public HttpClientRequest post(int port, String host, String requestURI) {
-    return request(HttpMethod.POST, port, host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest post(String host, String requestURI) {
-    return post(options.getDefaultPort(), host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest post(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.POST, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest post(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.POST, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest post(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return post(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest post(String requestURI) {
-    return request(HttpMethod.POST, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest post(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.POST, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest postAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.POST, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest postAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.POST, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest head(RequestOptions options) {
-    return request(HttpMethod.HEAD, options);
-  }
-
-  @Override
-  public HttpClientRequest head(int port, String host, String requestURI) {
-    return request(HttpMethod.HEAD, port, host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest head(String host, String requestURI) {
-    return head(options.getDefaultPort(), host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest head(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.HEAD, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest head(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.HEAD, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest head(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return head(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest head(String requestURI) {
-    return request(HttpMethod.HEAD, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest head(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.HEAD, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest headAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.HEAD, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest headAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.HEAD, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest options(RequestOptions options) {
-    return request(HttpMethod.OPTIONS, options);
-  }
-
-  @Override
-  public HttpClientRequest options(int port, String host, String requestURI) {
-    return request(HttpMethod.OPTIONS, port, host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest options(String host, String requestURI) {
-    return options(options.getDefaultPort(), host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest options(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.OPTIONS, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest options(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.OPTIONS, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest options(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return options(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest options(String requestURI) {
-    return request(HttpMethod.OPTIONS, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest options(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.OPTIONS, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest optionsAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.OPTIONS, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest optionsAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.OPTIONS, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest put(RequestOptions options) {
-    return request(HttpMethod.PUT, options);
-  }
-
-  @Override
-  public HttpClientRequest put(int port, String host, String requestURI) {
-    return request(HttpMethod.PUT, port, host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest put(String host, String requestURI) {
-    return put(options.getDefaultPort(), host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest put(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.PUT, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest put(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.PUT, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest put(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return put(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest put(String requestURI) {
-    return request(HttpMethod.PUT, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest put(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.PUT, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest putAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.PUT, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest putAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.PUT, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest delete(RequestOptions options) {
-    return request(HttpMethod.DELETE, options);
-  }
-
-  @Override
-  public HttpClientRequest delete(int port, String host, String requestURI) {
-    return request(HttpMethod.DELETE, port, host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest delete(String host, String requestURI) {
-    return delete(options.getDefaultPort(), host, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest delete(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.DELETE, options, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest delete(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.DELETE, port, host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest delete(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return delete(options.getDefaultPort(), host, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest delete(String requestURI) {
-    return request(HttpMethod.DELETE, requestURI);
-  }
-
-  @Override
-  public HttpClientRequest delete(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return request(HttpMethod.DELETE, requestURI, responseHandler);
-  }
-
-  @Override
-  public HttpClientRequest deleteAbs(String absoluteURI) {
-    return requestAbs(HttpMethod.DELETE, absoluteURI);
-  }
-
-  @Override
-  public HttpClientRequest deleteAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    return requestAbs(HttpMethod.DELETE, absoluteURI, responseHandler);
-  }
-
-  @Override
-  public void close() {
+  public void close(Promise<Void> completion) {
     synchronized (this) {
-      checkClosed();
-      closed = true;
+      if (timerID >= 0) {
+        vertx.cancelTimer(timerID);
+        timerID = -1;
+      }
     }
-    if (context.deploymentID() != null) {
-      context.removeCloseHook(closeHook);
-    }
-    websocketCM.close();
+    webSocketCM.close();
     httpCM.close();
+    ChannelGroupFuture fut = channelGroup.close();
     if (metrics != null) {
-      metrics.close();
+      PromiseInternal<Void> p = (PromiseInternal) Promise.promise();
+      fut.addListener(p);
+      p.future().<Void>compose(v -> {
+        metrics.close();
+        return Future.succeededFuture();
+      }).onComplete(completion);
+    } else {
+      fut.addListener((PromiseInternal)completion);
     }
+  }
+
+  @Override
+  public void close(Handler<AsyncResult<Void>> handler) {
+    ContextInternal closingCtx = vertx.getOrCreateContext();
+    closeFuture.close(handler != null ? closingCtx.promise(handler) : null);
+  }
+
+  @Override
+  public Future<Void> close() {
+    ContextInternal closingCtx = vertx.getOrCreateContext();
+    PromiseInternal<Void> promise = closingCtx.promise();
+    closeFuture.close(promise);
+    return promise.future();
   }
 
   @Override
@@ -705,7 +493,7 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
   }
 
   @Override
-  public HttpClient redirectHandler(Function<HttpClientResponse, Future<HttpClientRequest>> handler) {
+  public HttpClient redirectHandler(Function<HttpClientResponse, Future<RequestOptions>> handler) {
     if (handler == null) {
       handler = DEFAULT_HANDLER;
     }
@@ -714,26 +502,12 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
   }
 
   @Override
-  public Function<HttpClientResponse, Future<HttpClientRequest>> redirectHandler() {
+  public Function<HttpClientResponse, Future<RequestOptions>> redirectHandler() {
     return redirectHandler;
   }
 
   public HttpClientOptions getOptions() {
     return options;
-  }
-
-  void getConnectionForRequest(ContextInternal ctx,
-                               SocketAddress peerAddress,
-                               boolean ssl,
-                               SocketAddress server,
-                               Handler<AsyncResult<HttpClientStream>> handler) {
-    httpCM.getConnection(context, peerAddress, ssl, server, ar -> {
-      if (ar.succeeded()) {
-        ar.result().createStream(ctx, handler);
-      } else {
-        ctx.dispatch(Future.failedFuture(ar.cause()), handler);
-      }
-    });
   }
 
   /**
@@ -747,70 +521,116 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
     return sslHelper;
   }
 
-  private URL parseUrl(String surl) {
-    // Note - parsing a URL this way is slower than specifying host, port and relativeURI
-    try {
-      return new URL(surl);
-    } catch (MalformedURLException e) {
-      throw new VertxException("Invalid url: " + surl, e);
-    }
-  }
-
-  private HttpClientRequest createRequest(HttpMethod method, SocketAddress serverAddress, String host, int port, Boolean ssl, String relativeURI, MultiMap headers) {
-    return createRequest(method, serverAddress, ssl==null || ssl==false ? "http" : "https", host, port, ssl, relativeURI, headers);
-  }
-
-  private HttpClientRequest createRequest(HttpMethod method, SocketAddress server, String protocol, String host, int port, Boolean ssl, String relativeURI, MultiMap headers) {
+  private void request(HttpMethod method,
+                       SocketAddress server,
+                       String host,
+                       int port,
+                       Boolean ssl,
+                       String requestURI,
+                       MultiMap headers,
+                       long timeout,
+                       Boolean followRedirects,
+                       PromiseInternal<HttpClientRequest> requestPromise) {
     Objects.requireNonNull(method, "no null method accepted");
-    Objects.requireNonNull(protocol, "no null protocol accepted");
     Objects.requireNonNull(host, "no null host accepted");
-    Objects.requireNonNull(relativeURI, "no null relativeURI accepted");
+    Objects.requireNonNull(requestURI, "no null requestURI accepted");
     boolean useAlpn = options.isUseAlpn();
     boolean useSSL = ssl != null ? ssl : options.isSsl();
     if (!useAlpn && useSSL && options.getProtocolVersion() == HttpVersion.HTTP_2) {
       throw new IllegalArgumentException("Must enable ALPN when using H2");
     }
     checkClosed();
-    HttpClientRequest req;
     boolean useProxy = !useSSL && proxyType == ProxyType.HTTP;
 
-    // Create the appropriate sub context
-    ContextInternal sub;
-    ContextInternal current = (ContextInternal) Vertx.currentContext();
-    if (current != null) {
-      sub = context.duplicate(current);
-    } else {
-      sub = context.duplicate();
-    }
-
     if (useProxy) {
-      int defaultPort = protocol.equals("ftp") ? 21 : 80;
-      String addPort = (port != -1 && port != defaultPort) ? (":" + port) : "";
-      relativeURI = protocol + "://" + host + addPort + relativeURI;
+      // If the requestURI is as not absolute URI then we do not recompute one for the proxy
+      if (!ABS_URI_START_PATTERN.matcher(requestURI).find()) {
+        int defaultPort = 80;
+        String addPort = (port != -1 && port != defaultPort) ? (":" + port) : "";
+        requestURI = (ssl == Boolean.TRUE ? "https://" : "http://") + host + addPort + requestURI;
+      }
       ProxyOptions proxyOptions = options.getProxyOptions();
       if (proxyOptions.getUsername() != null && proxyOptions.getPassword() != null) {
         if (headers == null) {
-          headers = MultiMap.caseInsensitiveMultiMap();
+          headers = HttpHeaders.headers();
         }
         headers.add("Proxy-Authorization", "Basic " + Base64.getEncoder()
-            .encodeToString((proxyOptions.getUsername() + ":" + proxyOptions.getPassword()).getBytes()));
+          .encodeToString((proxyOptions.getUsername() + ":" + proxyOptions.getPassword()).getBytes()));
       }
-      req = new HttpClientRequestImpl(this, sub, useSSL, method, SocketAddress.inetSocketAddress(proxyOptions.getPort(), proxyOptions.getHost()),
-          host, port, relativeURI, vertx);
-    } else {
-      if (server == null) {
-        server = SocketAddress.inetSocketAddress(port, host);
-      }
-      req = new HttpClientRequestImpl(this, sub, useSSL, method, server, host, port, relativeURI, vertx);
+      server = SocketAddress.inetSocketAddress(proxyOptions.getPort(), proxyOptions.getHost());
+    } else if (server == null) {
+      server = SocketAddress.inetSocketAddress(port, host);
     }
-    if (headers != null) {
-      req.headers().setAll(headers);
+
+    String peerHost = host;
+    if (peerHost.endsWith(".")) {
+      peerHost = peerHost.substring(0, peerHost.length() -  1);
     }
-    return req;
+    SocketAddress peerAddress = SocketAddress.inetSocketAddress(port, peerHost);
+    request(method, peerAddress, server, host, port, useSSL, requestURI, headers, timeout, followRedirects, requestPromise);
   }
 
-  private synchronized void checkClosed() {
-    if (closed) {
+  private void request(
+    HttpMethod method,
+    SocketAddress peerAddress,
+    SocketAddress server,
+    String host,
+    int port,
+    Boolean useSSL,
+    String requestURI,
+    MultiMap headers,
+    long timeout,
+    Boolean followRedirects,
+    PromiseInternal<HttpClientRequest> requestPromise) {
+    ContextInternal ctx = requestPromise.context();
+    EndpointKey key = new EndpointKey(useSSL, server, peerAddress);
+    long timerID;
+    if (timeout > 0L) {
+      timerID = ctx.setTimer(timeout, id -> {
+        requestPromise.tryFail(HttpClientRequestBase.timeoutEx(timeout, method, server, requestURI));
+      });
+    } else {
+      timerID = -1L;
+    }
+    EventLoopContext eventLoopContext;
+    if (ctx instanceof EventLoopContext) {
+      eventLoopContext = (EventLoopContext) ctx;
+    } else {
+      eventLoopContext = (EventLoopContext) vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
+    }
+    httpCM.getConnection(eventLoopContext, key, ar1 -> {
+      if (ar1.succeeded()) {
+        HttpClientConnection conn = ar1.result();
+        conn.createStream(ctx, ar2 -> {
+          if (ar2.succeeded()) {
+            HttpClientStream stream = ar2.result();
+            HttpClientRequestImpl req = new HttpClientRequestImpl(this, stream, ctx.promise(), useSSL, method, server, host, port, requestURI);
+            if (headers != null) {
+              req.headers().setAll(headers);
+            }
+            if (followRedirects != null) {
+              req.setFollowRedirects(followRedirects);
+            }
+            if (timerID >= 0L) {
+              if (!vertx.cancelTimer(timerID)) {
+                req.reset(0);
+                return;
+              }
+              req.setTimeout(timeout);
+            }
+            requestPromise.complete(req);
+          } else {
+            requestPromise.tryFail(ar2.cause());
+          }
+        });
+      } else {
+        requestPromise.tryFail(ar1.cause());
+      }
+    });
+  }
+
+  private void checkClosed() {
+    if (closeFuture.isClosed()) {
       throw new IllegalStateException("Client is closed");
     }
   }
@@ -820,7 +640,7 @@ public class HttpClientImpl implements HttpClient, MetricsProvider {
     // Make sure this gets cleaned up if there are no more references to it
     // so as not to leave connections and resources dangling until the system is shutdown
     // which could make the JVM run out of file handles.
-    close();
+    close((Handler<AsyncResult<Void>>) Promise.<Void>promise());
     super.finalize();
   }
 }

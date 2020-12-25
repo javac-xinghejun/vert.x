@@ -199,88 +199,53 @@ Vert.x will also provide stack traces to pinpoint exactly where the blocking is 
 If you want to turn off these warnings or change the settings, you can do that in the
 {@link io.vertx.core.VertxOptions} object before creating the Vertx object.
 
-[[blocking_code]]
-== Running blocking code
+== Future results
 
-In a perfect world, there will be no war or hunger, all APIs will be written asynchronously and bunny rabbits will
-skip hand-in-hand with baby lambs across sunny green meadows.
+Vert.x 4 use futures to represent asynchronous results.
 
-*But... the real world is not like that. (Have you watched the news lately?)*
+Any asynchronous method returns a {@link io.vertx.core.Future} object for the result of the call:
+a _success_ or a _failure_.
 
-Fact is, many, if not most libraries, especially in the JVM ecosystem have synchronous APIs and many of the methods are
-likely to block. A good example is the JDBC API - it's inherently synchronous, and no matter how hard it tries, Vert.x
-cannot sprinkle magic pixie dust on it to make it asynchronous.
-
-We're not going to rewrite everything to be asynchronous overnight so we need to provide you a way to use "traditional"
-blocking APIs safely within a Vert.x application.
-
-As discussed before, you can't call blocking operations directly from an event loop, as that would prevent it
-from doing any other useful work. So how can you do this?
-
-It's done by calling {@link io.vertx.core.Vertx#executeBlocking} specifying both the blocking code to execute and a
-result handler to be called back asynchronous when the blocking code has been executed.
+You cannot interact directly with the result of a future, instead you need to set a handler that will be called when the future
+completes and the result is available, like any other kind of event.
 
 [source,$lang]
 ----
-{@link examples.CoreExamples#example7}
+{@link examples.CoreExamples#exampleFuture1}
 ----
 
-WARNING: Blocking code should block for a reasonable amount of time (i.e no more than a few seconds). Long blocking operations
-         or polling operations (i.e a thread that spin in a loop polling events in a blocking fashion) are precluded.
-         When the blocking operation lasts more than the 10 seconds, a message will be printed on the console by the
-         blocked thread checker. Long blocking operations should use a dedicated thread managed by the application,
-         which can interact with verticles using the event-bus or {@link io.vertx.core.Context#runOnContext(io.vertx.core.Handler)}
+NOTE: Vert.x 3 provides a callback-only model. To allow an easy migration to Vert.x 4 we decided that each asynchronous method
+has also a callback version. The `props` method above has also a version {@link io.vertx.core.file.FileSystem#props(java.lang.String, io.vertx.core.Handler)}
+with a callback as method argument.
 
+== Future composition
 
-By default, if executeBlocking is called several times from the same context (e.g. the same verticle instance) then
-the different executeBlocking are executed _serially_ (i.e. one after another).
+{@link io.vertx.core.Future#compose(java.util.function.Function)} can be used for chaining futures:
 
-If you don't care about ordering you can call {@link io.vertx.core.Vertx#executeBlocking(io.vertx.core.Handler,boolean,io.vertx.core.Handler)}
-specifying `false` as the argument to `ordered`. In this case any executeBlocking may be executed in parallel
-on the worker pool.
-
-An alternative way to run blocking code is to use a <<worker_verticles, worker verticle>>
-
-A worker verticle is always executed with a thread from the worker pool.
-
-By default blocking code is executed on the Vert.x worker pool, configured with {@link io.vertx.core.VertxOptions#setWorkerPoolSize(int)}.
-
-Additional pools can be created for different purposes:
+- when the current future succeeds, apply the given function, that returns a future. When this returned future completes, the composition succeeds.
+- when the current future fails, the composition fails
 
 [source,$lang]
 ----
-{@link examples.CoreExamples#workerExecutor1}
+{@link examples.CoreExamples#exampleFutureComposition1}
 ----
 
-The worker executor must be closed when it's not necessary anymore:
+In this example, 3 operations are chained together:
 
-[source,$lang]
-----
-{@link examples.CoreExamples#workerExecutor2}
-----
+1. a file is created
+2. data is written in this file
+3. the file is moved
 
-When several workers are created with the same name, they will share the same pool. The worker pool is destroyed
-when all the worker executors using it are closed.
+When these 3 steps are successful, the final future (`future`) will succeed. However, if one
+of the steps fails, the final future will fail.
 
-When an executor is created in a Verticle, Vert.x will close it automatically for you when the Verticle
-is undeployed.
+Beyond this, {@link io.vertx.core.Future} offers more: `map`, `recover`, `otherwise` and even a `flatMap` which is an alias of `compose`
 
-Worker executors can be configured when created:
+== Future coordination
 
-[source,$lang]
-----
-{@link examples.CoreExamples#workerExecutor3}
-----
-
-NOTE: the configuration is set when the worker pool is created
-
-== Async coordination
-
-Coordination of multiple asynchronous results can be achieved with Vert.x {@link io.vertx.core.Future futures}. It
+Coordination of multiple futures can be achieved with Vert.x {@link io.vertx.core.Future futures}. It
 supports concurrent composition (run several async operations in parallel) and sequential composition
 (chain async operations).
-
-=== Concurrent composition
 
 {@link io.vertx.core.CompositeFuture#all} takes several futures arguments (up to 6) and returns a future that is
 _succeeded_ when all the futures are and _failed_ when at least one of the futures is failed:
@@ -336,30 +301,33 @@ A list of futures can be used also:
 {@link examples.CoreExamples#exampleFutureJoin2}
 ----
 
-=== Sequential composition
+=== CompletionStage interoperability
 
-While `all` and `any` are implementing concurrent composition, {@link io.vertx.core.Future#compose} can be used
-for chaining futures (so sequential composition).
+The Vert.x `Future` API offers compatibility _from_ and _to_ `CompletionStage` which is the JDK interface for composable
+asynchronous operations.
+
+We can go from a Vert.x `Future` to a `CompletionStage` using the {@link io.vertx.core.Future#toCompletionStage} method, as in:
 
 [source,$lang]
 ----
-{@link examples.CoreExamples#exampleFuture6}
+{@link examples.CompletionStageInteropExamples#toCS}
 ----
 
-In this example, 3 operations are chained:
+We can conversely go from a `CompletionStage` to Vert.x `Future` using {@link io.vertx.core.Future#fromCompletionStage}.
+There are 2 variants:
 
-1. a file is created (`fut1`)
-2. something is written in the file (`fut2`)
-3. the file is moved (`startFuture`)
+. the first variant takes just a `CompletionStage` and calls the `Future` methods from the thread that resolves the `CompletionStage` instance, and
+. the second variant takes an extra {@link io.vertx.core.Context} parameter to call the `Future` methods on a Vert.x context.
 
-When these 3 steps are successful, the final future (`startFuture`) is succeeded. However, if one
-of the steps fails, the final future is failed.
+IMPORTANT: In most cases the variant with a `CompletionStage` and a `Context` is the one you will want to use to respect the Vert.x threading model,
+since Vert.x `Future` are more likely to be used with Vert.x code, libraries and clients.
 
-This example uses {@link io.vertx.core.Future#compose(java.util.function.Function)}: when the current future completes,
-run the given function, that returns a future. When this returned future completes, it completes the composition.
+Here is an example of going from a `CompletionStage` to a Vert.x `Future` and dispatching on a context:
 
-In this second case, the {@link io.vertx.core.Handler} should complete the `next` future to report its success or
-failure.
+[source,$lang]
+----
+{@link examples.CompletionStageInteropExamples#fromCS}
+----
 
 == Verticles
 
@@ -387,13 +355,11 @@ include::override/verticles.adoc[]
 
 === Verticle Types
 
-There are three different types of verticles:
+There are two different types of verticles:
 
 Standard Verticles:: These are the most common and useful type - they are always executed using an event loop thread.
 We'll discuss this more in the next section.
 Worker Verticles:: These run using a thread from the worker pool. An instance is never executed concurrently by more
-than one thread.
-Multi-threaded worker verticles:: These run using a thread from the worker pool. An instance can be executed concurrently by more
 than one thread.
 
 === Standard verticles
@@ -525,39 +491,6 @@ This is useful for scaling easily across multiple cores. For example you might h
 and multiple cores on your machine, so you want to deploy multiple instances to utilise all the cores.
 
 include::override/verticle-configuration.adoc[]
-
-=== Verticle Isolation Groups
-
-By default, Vert.x has a _flat classpath_. I.e, when Vert.x deploys verticles it does so with the current classloader -
-it doesn't create a new one. In the majority of cases this is the simplest, clearest, and sanest thing to do.
-
-However, in some cases you may want to deploy a verticle so the classes of that verticle are isolated from others in
-your application.
-
-This might be the case, for example, if you want to deploy two different versions of a verticle with the same class name
-in the same Vert.x instance, or if you have two different verticles which use different versions of the same jar library.
-
-When using an isolation group you provide a list of the class names that you want isolated using
-{@link io.vertx.core.DeploymentOptions#setIsolatedClasses(java.util.List)}-  an entry can be a fully qualified
-classname such as `com.mycompany.myproject.engine.MyClass` or it can be a wildcard which will match any classes in a package and any
-sub-packages, e.g. `com.mycompany.myproject.*` would match any classes in the package `com.mycompany.myproject` or
-any sub-packages.
-
-Please note that _only_ the classes that match will be isolated - any other classes will be loaded by the current
-class loader.
-
-Extra classpath entries can also be provided with {@link io.vertx.core.DeploymentOptions#setExtraClasspath} so if
-you want to load classes or resources that aren't already present on the main classpath you can add this.
-
-WARNING: Use this feature with caution. Class-loaders can be a can of worms, and can make debugging difficult, amongst
-other things.
-
-Here's an example of using an isolation group to isolate a verticle deployment.
-
-[source,$lang]
-----
-{@link examples.CoreExamples#example14}
-----
 
 === High Availability
 
@@ -772,6 +705,81 @@ from the event loop of the verticle.
 If you stick to the standard Vert.x verticle deployment model and avoid sharing objects between verticles then this
 should be the case without you having to think about it.
 
+[[blocking_code]]
+== Running blocking code
+
+In a perfect world, there will be no war or hunger, all APIs will be written asynchronously and bunny rabbits will
+skip hand-in-hand with baby lambs across sunny green meadows.
+
+*But... the real world is not like that. (Have you watched the news lately?)*
+
+Fact is, many, if not most libraries, especially in the JVM ecosystem have synchronous APIs and many of the methods are
+likely to block. A good example is the JDBC API - it's inherently synchronous, and no matter how hard it tries, Vert.x
+cannot sprinkle magic pixie dust on it to make it asynchronous.
+
+We're not going to rewrite everything to be asynchronous overnight so we need to provide you a way to use "traditional"
+blocking APIs safely within a Vert.x application.
+
+As discussed before, you can't call blocking operations directly from an event loop, as that would prevent it
+from doing any other useful work. So how can you do this?
+
+It's done by calling {@link io.vertx.core.Vertx#executeBlocking} specifying both the blocking code to execute and a
+result handler to be called back asynchronous when the blocking code has been executed.
+
+[source,$lang]
+----
+{@link examples.CoreExamples#example7}
+----
+
+WARNING: Blocking code should block for a reasonable amount of time (i.e no more than a few seconds). Long blocking operations
+or polling operations (i.e a thread that spin in a loop polling events in a blocking fashion) are precluded.
+When the blocking operation lasts more than the 10 seconds, a message will be printed on the console by the
+blocked thread checker. Long blocking operations should use a dedicated thread managed by the application,
+which can interact with verticles using the event-bus or {@link io.vertx.core.Context#runOnContext(io.vertx.core.Handler)}
+
+
+By default, if executeBlocking is called several times from the same context (e.g. the same verticle instance) then
+the different executeBlocking are executed _serially_ (i.e. one after another).
+
+If you don't care about ordering you can call {@link io.vertx.core.Vertx#executeBlocking(io.vertx.core.Handler,boolean,io.vertx.core.Handler)}
+specifying `false` as the argument to `ordered`. In this case any executeBlocking may be executed in parallel
+on the worker pool.
+
+An alternative way to run blocking code is to use a <<worker_verticles, worker verticle>>
+
+A worker verticle is always executed with a thread from the worker pool.
+
+By default blocking code is executed on the Vert.x worker pool, configured with {@link io.vertx.core.VertxOptions#setWorkerPoolSize(int)}.
+
+Additional pools can be created for different purposes:
+
+[source,$lang]
+----
+{@link examples.CoreExamples#workerExecutor1}
+----
+
+The worker executor must be closed when it's not necessary anymore:
+
+[source,$lang]
+----
+{@link examples.CoreExamples#workerExecutor2}
+----
+
+When several workers are created with the same name, they will share the same pool. The worker pool is destroyed
+when all the worker executors using it are closed.
+
+When an executor is created in a Verticle, Vert.x will close it automatically for you when the Verticle
+is undeployed.
+
+Worker executors can be configured when created:
+
+[source,$lang]
+----
+{@link examples.CoreExamples#workerExecutor3}
+----
+
+NOTE: the configuration is set when the worker pool is created
+
 == Metrics SPI
 
 By default Vert.x does not record any metrics. Instead it provides an SPI for others to implement which can be added
@@ -781,45 +789,6 @@ order to gather metrics. For more information on this, please consult the
 
 You can also specify a metrics factory programmatically if embedding Vert.x using
 {@link io.vertx.core.metrics.MetricsOptions#setFactory(io.vertx.core.spi.VertxMetricsFactory)}.
-
-== OSGi
-
-Vert.x Core is packaged as an OSGi bundle, so can be used in any OSGi R4.2+ environment such as Apache Felix
-or Eclipse Equinox. The bundle exports `io.vertx.core*`.
-
-However, the bundle has some dependencies on Jackson and Netty. To get the vert.x core bundle resolved deploy:
-
-* Jackson Annotation [2.6.0,3)
-* Jackson Core [2.6.2,3)
-* Jackson Databind [2.6.2,3)
-* Netty Buffer [4.0.31,5)
-* Netty Codec [4.0.31,5)
-* Netty Codec/Socks [4.0.31,5)
-* Netty Codec/Common [4.0.31,5)
-* Netty Codec/Handler [4.0.31,5)
-* Netty Codec/Transport [4.0.31,5)
-
-Here is a working deployment on Apache Felix 5.2.0:
-
-[source]
-----
-14|Active     |    1|Jackson-annotations (2.6.0)
-15|Active     |    1|Jackson-core (2.6.2)
-16|Active     |    1|jackson-databind (2.6.2)
-18|Active     |    1|Netty/Buffer (4.0.31.Final)
-19|Active     |    1|Netty/Codec (4.0.31.Final)
-20|Active     |    1|Netty/Codec/HTTP (4.0.31.Final)
-21|Active     |    1|Netty/Codec/Socks (4.0.31.Final)
-22|Active     |    1|Netty/Common (4.0.31.Final)
-23|Active     |    1|Netty/Handler (4.0.31.Final)
-24|Active     |    1|Netty/Transport (4.0.31.Final)
-25|Active     |    1|Netty/Transport/SCTP (4.0.31.Final)
-26|Active     |    1|Vert.x Core (3.1.0)
-----
-
-On Equinox, you may want to disable the `ContextFinder` with the following framework property:
-`eclipse.bundle.setTCCL=false`
-
 
 == The 'vertx' command line
 
@@ -888,8 +857,9 @@ one instance. If omitted a single instance will be deployed.
  cluster communication with other Vert.x instances. Default is `0` - which means '_choose a free random port_'. You
  don't usually need to specify this parameter unless you really need to bind to a specific port.
  * `-cluster-host` - If the `cluster` option has also been specified then this determines which host address will be
- bound for cluster communication with other Vert.x instances. By default it will try and pick one from the available
- interfaces. If you have more than one interface and you want to use a specific one, specify it here.
+ bound for cluster communication with other Vert.x instances. If not set, the clustered eventbus tries to bind to the
+ same host as the underlying cluster manager. As a last resort, an address will be picked among the available network
+ interfaces.
  * `-cluster-public-port` - If the `cluster` option has also been specified then this determines which port will be advertised for
  cluster communication with other Vert.x instances. Default is `-1`, which means same as `cluster-port`.
  * `-cluster-public-host` - If the `cluster` option has also been specified then this determines which host address will be advertised for
@@ -1072,9 +1042,9 @@ examples:
 
 [source]
 ----
-vertx run MyVerticle.groovy --redeploy="**&#47;*.groovy" --launcher-class=io.vertx.core.Launcher
-vertx run MyVerticle.groovy --redeploy="**&#47;*.groovy,**&#47;*.rb"  --launcher-class=io.vertx.core.Launcher
-java io.vertx.core.Launcher run org.acme.MyVerticle --redeploy="**&#47;*.class"  --launcher-class=io.vertx.core
+vertx run MyVerticle.groovy --redeploy="**/*.groovy" --launcher-class=io.vertx.core.Launcher
+vertx run MyVerticle.groovy --redeploy="**/*.groovy,**/*.rb"  --launcher-class=io.vertx.core.Launcher
+java io.vertx.core.Launcher run org.acme.MyVerticle --redeploy="**/*.class"  --launcher-class=io.vertx.core
 .Launcher -cp ...
 ----
 
@@ -1096,11 +1066,11 @@ The `--launcher-class` option determine with with _main_ class the application i
 The redeploy feature can be used in your IDE:
 
 * Eclipse - create a _Run_ configuration, using the `io.vertx.core.Launcher` class a _main class_. In the _Program
-arguments_ area (in the _Arguments_ tab), write `run your-verticle-fully-qualified-name --redeploy=\**&#47;*.java
+arguments_ area (in the _Arguments_ tab), write `run your-verticle-fully-qualified-name --redeploy=\**/*.java
 --launcher-class=io.vertx.core.Launcher`. You can also add other parameters. The redeployment works smoothly as
 Eclipse incrementally compiles your files on save.
 * IntelliJ - create a _Run_ configuration (_Application_), set the _Main class_ to `io.vertx.core.Launcher`. In
-the Program arguments write: `run your-verticle-fully-qualified-name --redeploy=\**&#47;*.class
+the Program arguments write: `run your-verticle-fully-qualified-name --redeploy=\**/*.class
 --launcher-class=io.vertx.core.Launcher`. To trigger the redeployment, you need to _make_ the project or
 the module explicitly (_Build_ menu -> _Make project_).
 
@@ -1112,8 +1082,8 @@ You can also hook your build process in the redeploy cycle:
 
 [source]
 ----
-java -jar target/my-fat-jar.jar --redeploy="**&#47;*.java" --on-redeploy="mvn package"
-java -jar build/libs/my-fat-jar.jar --redeploy="src&#47;**&#47;*.java" --on-redeploy='./gradlew shadowJar'
+java -jar target/my-fat-jar.jar --redeploy="**/*.java" --on-redeploy="mvn package"
+java -jar build/libs/my-fat-jar.jar --redeploy="src/**/*.java" --on-redeploy='./gradlew shadowJar'
 ----
 
 The "on-redeploy" option specifies a command invoked after the shutdown of the application and before the
@@ -1123,8 +1093,8 @@ or `grunt` to update your resources. Don't forget that passing parameters to you
 
 [source]
 ----
-java -jar target/my-fat-jar.jar --redeploy="**&#47;*.java" --on-redeploy="mvn package" --java-opts="-Dkey=val"
-java -jar build/libs/my-fat-jar.jar --redeploy="src&#47;**&#47;*.java" --on-redeploy='./gradlew shadowJar' --java-opts="-Dkey=val"
+java -jar target/my-fat-jar.jar --redeploy="**/*.java" --on-redeploy="mvn package" --java-opts="-Dkey=val"
+java -jar build/libs/my-fat-jar.jar --redeploy="src/**/*.java" --on-redeploy='./gradlew shadowJar' --java-opts="-Dkey=val"
 ----
 
 The redeploy feature also supports the following settings:
@@ -1183,9 +1153,17 @@ Otherwise Vert.x defaults to JDK logging.
 Set the `vertx.logger-delegate-factory-class-name` system property to:
 
 * `io.vertx.core.logging.SLF4JLogDelegateFactory` for SLF4J or,
-* `io.vertx.core.logging.Log4jLogDelegateFactory` for Log4J or,
 * `io.vertx.core.logging.Log4j2LogDelegateFactory` for Log4J2 or,
 * `io.vertx.core.logging.JULLogDelegateFactory` for JDK logging
+
+=== Automatic configuration
+
+When no `vertx.logger-delegate-factory-class-name` system property is set, Vert.x will try to find
+the most appropriate logger:
+
+* use SLF4J when available on the classpath with an actual implementation (i.e. `LoggerFactory.getILoggerFactory()` is not an instance of `NOPLoggerFactory`)
+* otherwise use Log4j2 when available on the classpath
+* otherwise use JUL
 
 === Configuring JUL logging
 
@@ -1212,8 +1190,8 @@ The logger implementation can be forced to a specific implementation by setting 
 
 [source,java]
 ----
-// Force logging to Log4j
-InternalLoggerFactory.setDefaultFactory(Log4JLoggerFactory.INSTANCE);
+// Force logging to Log4j 2
+InternalLoggerFactory.setDefaultFactory(Log4J2LoggerFactory.INSTANCE);
 ----
 
 === Troubleshooting
@@ -1403,8 +1381,8 @@ You need to add the following dependency in your classpath:
 <dependency>
   <groupId>io.netty</groupId>
   <artifactId>netty-transport-native-epoll</artifactId>
-  <version>4.1.15.Final</version>
   <classifier>linux-x86_64</classifier>
+  <!--<version>Should align with netty version that Vert.x uses</version>-->
 </dependency>
 ----
 
@@ -1429,8 +1407,8 @@ You need to add the following dependency in your classpath:
 <dependency>
   <groupId>io.netty</groupId>
   <artifactId>netty-transport-native-kqueue</artifactId>
-  <version>4.1.15.Final</version>
   <classifier>osx-x86_64</classifier>
+  <!--<version>Should align with netty version that Vert.x uses</version>-->
 </dependency>
 ----
 
@@ -1524,18 +1502,18 @@ You can extend the set of command by implementing your own {@link io.vertx.core.
 
 [source, java]
 ----
-&#64;Name("my-command")
-&#64;Summary("A simple hello command.")
+@Name("my-command")
+@Summary("A simple hello command.")
 public class MyCommand extends DefaultCommand {
 
   private String name;
 
-  &#64;Option(longName = "name", required = true)
+  @Option(longName = "name", required = true)
   public void setName(String n) {
     this.name = n;
   }
 
-  &#64;Override
+  @Override
   public void run() throws CLIException {
     System.out.println("Hello " + name);
   }

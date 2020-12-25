@@ -12,15 +12,14 @@
 package io.vertx.core.eventbus;
 
 import io.vertx.core.*;
+import io.vertx.core.eventbus.impl.EventBusInternal;
 import io.vertx.core.eventbus.impl.MessageConsumerImpl;
-import io.vertx.core.http.CaseInsensitiveHeaders;
 import io.vertx.core.impl.ConcurrentHashSet;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.EventLoopContext;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.streams.Pump;
 import io.vertx.core.streams.ReadStream;
-import io.vertx.core.streams.WriteStream;
 import io.vertx.test.core.TestUtils;
 import org.junit.Test;
 
@@ -40,14 +39,14 @@ import static io.vertx.test.core.TestUtils.*;
  */
 public class LocalEventBusTest extends EventBusTestBase {
 
-  private EventBus eb;
+  private EventBusInternal eb;
   private boolean running;
 
   public void setUp() throws Exception {
     super.setUp();
     vertx.close();
     vertx = Vertx.vertx();
-    eb = vertx.eventBus();
+    eb = (EventBusInternal) vertx.eventBus();
     running = true;
   }
 
@@ -134,7 +133,7 @@ public class LocalEventBusTest extends EventBusTestBase {
     vertx.deployVerticle(new AbstractVerticle() {
       MessageConsumer consumer;
       @Override
-      public void start() throws Exception {
+      public void start() {
         context.exceptionHandler(err -> {
           fail("Unexpected exception");
         });
@@ -655,7 +654,9 @@ public class LocalEventBusTest extends EventBusTestBase {
 
   @Test
   public void testCloseEventBus() {
-    eb.close(ar -> {
+    Promise<Void> promise = Promise.promise();
+    eb.close(promise);
+    promise.future().onComplete(ar -> {
       assertTrue(ar.succeeded());
       testComplete();
     });
@@ -751,7 +752,7 @@ public class LocalEventBusTest extends EventBusTestBase {
 
   @Test
   public void testHeadersCopiedAfterSend() throws Exception {
-    MultiMap headers = new CaseInsensitiveHeaders();
+    MultiMap headers = MultiMap.caseInsensitiveMultiMap();
     headers.add("foo", "bar");
     vertx.eventBus().consumer(ADDRESS1).handler(msg -> {
       assertNotSame(headers, msg.headers());
@@ -1213,7 +1214,7 @@ public class LocalEventBusTest extends EventBusTestBase {
   @Test
   public void testSender() {
     String str = TestUtils.randomUnicodeString(100);
-    WriteStream<String> sender = eb.sender(ADDRESS1);
+    MessageProducer<String> sender = eb.sender(ADDRESS1);
     eb.consumer(ADDRESS1).handler(message -> {
       if (message.body().equals(str)) {
         testComplete();
@@ -1226,7 +1227,7 @@ public class LocalEventBusTest extends EventBusTestBase {
   @Test
   public void testSenderWithOptions() {
     String str = TestUtils.randomUnicodeString(100);
-    WriteStream<String> sender = eb.sender(ADDRESS1, new DeliveryOptions().addHeader("foo", "foo_value"));
+    MessageProducer<String> sender = eb.sender(ADDRESS1, new DeliveryOptions().addHeader("foo", "foo_value"));
     eb.consumer(ADDRESS1).handler(message -> {
       if (message.body().equals(str) && "foo_value".equals(message.headers().get("foo"))) {
         testComplete();
@@ -1290,20 +1291,6 @@ public class LocalEventBusTest extends EventBusTestBase {
   @Test
   public void testClosePublisher2() {
     eb.publisher(ADDRESS1).close(null);
-  }
-
-  @Test
-  public void testPump() {
-    String str = TestUtils.randomUnicodeString(100);
-    ReadStream<String> consumer = eb.<String>consumer(ADDRESS1).bodyStream();
-    consumer.handler(message -> {
-      if (message.equals(str)) {
-        testComplete();
-      }
-    });
-    MessageProducer<String> producer = eb.sender(ADDRESS2);
-    Pump.pump(consumer, producer);
-    producer.write(str);
   }
 
   @Test

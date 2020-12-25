@@ -12,8 +12,7 @@
 package io.vertx.core;
 
 import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.VertxGen;
-import io.vertx.core.impl.CompositeFutureImpl;
+import io.vertx.core.impl.future.CompositeFutureImpl;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +24,6 @@ import java.util.List;
  *
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-@VertxGen
 public interface CompositeFuture extends Future<CompositeFuture> {
 
   /**
@@ -75,7 +73,7 @@ public interface CompositeFuture extends Future<CompositeFuture> {
    * When the list is empty, the returned future will be already completed.
    */
   static CompositeFuture all(List<Future> futures) {
-    return CompositeFutureImpl.all(futures.toArray(new Future[futures.size()]));
+    return CompositeFutureImpl.all(futures.toArray(new Future[0]));
   }
 
   /**
@@ -125,7 +123,7 @@ public interface CompositeFuture extends Future<CompositeFuture> {
    * When the list is empty, the returned future will be already completed.
    */
   static CompositeFuture any(List<Future> futures) {
-    return CompositeFutureImpl.any(futures.toArray(new Future[futures.size()]));
+    return CompositeFutureImpl.any(futures.toArray(new Future[0]));
   }
 
   /**
@@ -175,13 +173,7 @@ public interface CompositeFuture extends Future<CompositeFuture> {
    * When the list is empty, the returned future will be already completed.
    */
   static CompositeFuture join(List<Future> futures) {
-    return CompositeFutureImpl.join(futures.toArray(new Future[futures.size()]));
-  }
-
-  @Override
-  default CompositeFuture setHandler(Handler<AsyncResult<CompositeFuture>> handler) {
-    Future.super.setHandler(handler);
-    return this;
+    return CompositeFutureImpl.join(futures.toArray(new Future[0]));
   }
 
   @Override
@@ -249,6 +241,19 @@ public interface CompositeFuture extends Future<CompositeFuture> {
     ArrayList<T> list = new ArrayList<>(size);
     for (int index = 0;index < size;index++) {
       list.add(resultAt(index));
+    }
+    return list;
+  }
+
+  /**
+   * @return a list of all the eventual failure causes. If no future failed, returns a list of null values.
+   */
+  @GenIgnore
+  default List<Throwable> causes() {
+    int size = size();
+    ArrayList<Throwable> list = new ArrayList<>(size);
+    for (int index = 0; index < size; index++) {
+      list.add(cause(index));
     }
     return list;
   }

@@ -2,6 +2,7 @@ package io.vertx.core;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.impl.JsonUtil;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
@@ -20,16 +21,6 @@ public class DeploymentOptionsConverter {
             obj.setConfig(((JsonObject)member.getValue()).copy());
           }
           break;
-        case "extraClasspath":
-          if (member.getValue() instanceof JsonArray) {
-            java.util.ArrayList<java.lang.String> list =  new java.util.ArrayList<>();
-            ((Iterable<Object>)member.getValue()).forEach( item -> {
-              if (item instanceof String)
-                list.add((String)item);
-            });
-            obj.setExtraClasspath(list);
-          }
-          break;
         case "ha":
           if (member.getValue() instanceof Boolean) {
             obj.setHa((Boolean)member.getValue());
@@ -38,21 +29,6 @@ public class DeploymentOptionsConverter {
         case "instances":
           if (member.getValue() instanceof Number) {
             obj.setInstances(((Number)member.getValue()).intValue());
-          }
-          break;
-        case "isolatedClasses":
-          if (member.getValue() instanceof JsonArray) {
-            java.util.ArrayList<java.lang.String> list =  new java.util.ArrayList<>();
-            ((Iterable<Object>)member.getValue()).forEach( item -> {
-              if (item instanceof String)
-                list.add((String)item);
-            });
-            obj.setIsolatedClasses(list);
-          }
-          break;
-        case "isolationGroup":
-          if (member.getValue() instanceof String) {
-            obj.setIsolationGroup((String)member.getValue());
           }
           break;
         case "maxWorkerExecuteTime":
@@ -92,21 +68,8 @@ public class DeploymentOptionsConverter {
     if (obj.getConfig() != null) {
       json.put("config", obj.getConfig());
     }
-    if (obj.getExtraClasspath() != null) {
-      JsonArray array = new JsonArray();
-      obj.getExtraClasspath().forEach(item -> array.add(item));
-      json.put("extraClasspath", array);
-    }
     json.put("ha", obj.isHa());
     json.put("instances", obj.getInstances());
-    if (obj.getIsolatedClasses() != null) {
-      JsonArray array = new JsonArray();
-      obj.getIsolatedClasses().forEach(item -> array.add(item));
-      json.put("isolatedClasses", array);
-    }
-    if (obj.getIsolationGroup() != null) {
-      json.put("isolationGroup", obj.getIsolationGroup());
-    }
     json.put("maxWorkerExecuteTime", obj.getMaxWorkerExecuteTime());
     if (obj.getMaxWorkerExecuteTimeUnit() != null) {
       json.put("maxWorkerExecuteTimeUnit", obj.getMaxWorkerExecuteTimeUnit().name());

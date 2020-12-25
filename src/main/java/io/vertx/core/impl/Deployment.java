@@ -12,6 +12,7 @@
 package io.vertx.core.impl;
 
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Context;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -30,13 +31,13 @@ public interface Deployment {
   void removeChild(Deployment deployment);
 
   default void undeploy(Handler<AsyncResult<Void>> completionHandler) {
-    undeploy().setHandler(completionHandler);
+    undeploy().onComplete(completionHandler);
   }
 
   Future<Void> undeploy();
 
   default void doUndeploy(ContextInternal undeployingContext, Handler<AsyncResult<Void>> completionHandler) {
-    doUndeploy(undeployingContext).setHandler(completionHandler);
+    doUndeploy(undeployingContext).onComplete(completionHandler);
   }
 
   Future<Void> doUndeploy(ContextInternal undeployingContext);
@@ -49,7 +50,12 @@ public interface Deployment {
 
   DeploymentOptions deploymentOptions();
 
+  Set<Context> getContexts();
+
   Set<Verticle> getVerticles();
 
+  void undeployHandler(Handler<Void> handler);
+
   boolean isChild();
+
 }

@@ -23,8 +23,8 @@ import io.vertx.core.file.OpenOptions;
 import io.vertx.core.impl.Arguments;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.logging.Logger;
-import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.impl.logging.Logger;
+import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.streams.impl.InboundBuffer;
 
 import java.io.IOException;
@@ -63,6 +63,7 @@ public class AsyncFileImpl implements AsyncFile {
   private boolean closed;
   private Runnable closedDeferred;
   private long writesOutstanding;
+  private boolean overflow;
   private Handler<Throwable> exceptionHandler;
   private Handler<Void> drainHandler;
   private long writePos;
@@ -143,7 +144,7 @@ public class AsyncFileImpl implements AsyncFile {
   @Override
   public synchronized AsyncFile read(Buffer buffer, int offset, long position, int length, Handler<AsyncResult<Buffer>> handler) {
     Objects.requireNonNull(handler, "handler");
-    read(buffer, offset, position, length).setHandler(handler);
+    read(buffer, offset, position, length).onComplete(handler);
     return this;
   }
 
@@ -184,17 +185,32 @@ public class AsyncFileImpl implements AsyncFile {
     Arguments.require(position >= 0, "position must be >= 0");
     check();
     Handler<AsyncResult<Void>> wrapped = ar -> {
-      if (ar.succeeded()) {
-        checkContext();
-        Runnable action;
-        synchronized (AsyncFileImpl.this) {
-          if (writesOutstanding == 0 && closedDeferred != null) {
-            action = closedDeferred;
+      checkContext();
+      Runnable action;
+      synchronized (AsyncFileImpl.this) {
+        if (writesOutstanding == 0 && closedDeferred != null) {
+          action = closedDeferred;
+        } else {
+          if (overflow && writesOutstanding <= lwm) {
+            overflow = false;
+            Handler<Void> h = drainHandler;
+            if (h != null) {
+              action = () -> {
+                h.handle(null);
+              };
+            } else {
+              action = null;
+            }
           } else {
-            action = this::checkDrained;
+            action = null;
           }
         }
+      }
+      if (action != null) {
         action.run();
+      }
+
+      if (ar.succeeded()) {
         if (handler != null) {
           handler.handle(ar);
         }
@@ -247,14 +263,13 @@ public class AsyncFileImpl implements AsyncFile {
   @Override
   public synchronized boolean writeQueueFull() {
     check();
-    return writesOutstanding >= maxWrites;
+    return overflow;
   }
 
   @Override
   public synchronized AsyncFile drainHandler(Handler<Void> handler) {
     check();
     this.drainHandler = handler;
-    checkDrained();
     return this;
   }
 
@@ -330,6 +345,11 @@ public class AsyncFileImpl implements AsyncFile {
   }
 
   @Override
+  public synchronized long getReadLength() {
+    return readLength;
+  }
+
+  @Override
   public synchronized AsyncFile setWritePos(long writePos) {
     this.writePos = writePos;
     return this;
@@ -338,14 +358,6 @@ public class AsyncFileImpl implements AsyncFile {
   @Override
   public synchronized long getWritePos() {
     return writePos;
-  }
-
-  private synchronized void checkDrained() {
-    if (drainHandler != null && writesOutstanding <= lwm) {
-      Handler<Void> handler = drainHandler;
-      drainHandler = null;
-      handler.handle(null);
-    }
   }
 
   private void handleException(Throwable t) {
@@ -386,7 +398,7 @@ public class AsyncFileImpl implements AsyncFile {
     int readSize = (int) Math.min((long)readBufferSize, readLength);
     bb.limit(readSize);
     Promise<Buffer> promise = context.promise();
-    promise.future().setHandler(ar -> {
+    promise.future().onComplete(ar -> {
       if (ar.succeeded()) {
         Buffer buffer = ar.result();
         readPos += buffer.length();
@@ -442,6 +454,7 @@ public class AsyncFileImpl implements AsyncFile {
     if (toWrite > 0) {
       synchronized (this) {
         writesOutstanding += toWrite;
+        overflow |= writesOutstanding >= maxWrites;
       }
       writeInternal(buff, position, handler);
     } else {
@@ -475,7 +488,12 @@ public class AsyncFileImpl implements AsyncFile {
 
       public void failed(Throwable exc, Object attachment) {
         if (exc instanceof Exception) {
-          context.runOnContext((v) -> handler.handle(Future.failedFuture(exc)));
+          context.runOnContext((v) -> {
+            synchronized (AsyncFileImpl.this) {
+              writesOutstanding -= buff.limit();
+            }
+            handler.handle(Future.failedFuture(exc));
+          });
         } else {
           log.error("Error occurred", exc);
         }

@@ -12,6 +12,7 @@
 package io.vertx.core;
 
 import io.vertx.codegen.annotations.DataObject;
+import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
@@ -30,7 +31,6 @@ import java.util.concurrent.TimeUnit;
 public class DeploymentOptions {
 
   public static final boolean DEFAULT_WORKER = false;
-  public static final String DEFAULT_ISOLATION_GROUP = null;
   public static final boolean DEFAULT_HA = false;
   public static final int DEFAULT_INSTANCES = 1;
 
@@ -45,6 +45,7 @@ public class DeploymentOptions {
   private int instances;
   private List<String> isolatedClasses;
   private TimeUnit maxWorkerExecuteTimeUnit;
+  private ClassLoader classLoader;
 
   /**
    * Default constructor
@@ -52,7 +53,7 @@ public class DeploymentOptions {
   public DeploymentOptions() {
     this.worker = DEFAULT_WORKER;
     this.config = null;
-    this.isolationGroup = DEFAULT_ISOLATION_GROUP;
+    this.isolationGroup = null;
     this.ha = DEFAULT_HA;
     this.instances = DEFAULT_INSTANCES;
     this.workerPoolName = null;
@@ -88,24 +89,12 @@ public class DeploymentOptions {
   public DeploymentOptions(JsonObject json) {
     this();
     DeploymentOptionsConverter.fromJson(json, this);
-  }
-
-  /**
-   * Initialise the fields of this instance from the specified JSON
-   *
-   * @param json  the JSON
-   */
-  public void fromJson(JsonObject json) {
-    this.config = json.getJsonObject("config");
-    this.worker = json.getBoolean("worker", DEFAULT_WORKER);
-    this.isolationGroup = json.getString("isolationGroup", DEFAULT_ISOLATION_GROUP);
-    this.ha = json.getBoolean("ha", DEFAULT_HA);
-    JsonArray arr = json.getJsonArray("extraClasspath", null);
+    this.isolationGroup = json.getString("isolationGroup");
+    JsonArray arr = json.getJsonArray("extraClasspath");
     if (arr != null) {
       this.extraClasspath = arr.getList();
     }
-    this.instances = json.getInteger("instances", DEFAULT_INSTANCES);
-    JsonArray arrIsolated = json.getJsonArray("isolatedClasses", null);
+    JsonArray arrIsolated = json.getJsonArray("isolatedClasses");
     if (arrIsolated != null) {
       this.isolatedClasses = arrIsolated.getList();
     }
@@ -153,19 +142,27 @@ public class DeploymentOptions {
 
   /**
    * Get the isolation group that will be used when deploying the verticle(s)
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @return the isolation group
    */
+  @GenIgnore
+  @Deprecated
   public String getIsolationGroup() {
     return isolationGroup;
   }
 
   /**
    * Set the isolation group that will be used when deploying the verticle(s)
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @param isolationGroup - the isolation group
    * @return a reference to this, so the API can be used fluently
    */
+  @GenIgnore
+  @Deprecated
   public DeploymentOptions setIsolationGroup(String isolationGroup) {
     this.isolationGroup = isolationGroup;
     return this;
@@ -195,9 +192,13 @@ public class DeploymentOptions {
    * Get any extra classpath to be used when deploying the verticle.
    * <p>
    * Ignored if no isolation group is set.
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @return  any extra classpath
    */
+  @GenIgnore
+  @Deprecated
   public List<String> getExtraClasspath() {
     return extraClasspath;
   }
@@ -206,9 +207,13 @@ public class DeploymentOptions {
    * Set any extra classpath to be used when deploying the verticle.
    * <p>
    * Ignored if no isolation group is set.
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @return a reference to this, so the API can be used fluently
    */
+  @GenIgnore
+  @Deprecated
   public DeploymentOptions setExtraClasspath(List<String> extraClasspath) {
     this.extraClasspath = extraClasspath;
     return this;
@@ -237,19 +242,27 @@ public class DeploymentOptions {
   /**
    * Get the list of isolated class names, the names can be a Java class fully qualified name such as
    * 'com.mycompany.myproject.engine.MyClass' or a wildcard matching such as `com.mycompany.myproject.*`.
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @return the list of isolated classes
    */
+  @GenIgnore
+  @Deprecated
   public List<String> getIsolatedClasses() {
     return isolatedClasses;
   }
 
   /**
    * Set the isolated class names.
+   * <br/>
+   * <strong>IMPORTANT</strong> this feature is removed when running with Java 11 or above.
    *
    * @param isolatedClasses the list of isolated class names
    * @return a reference to this, so the API can be used fluently
    */
+  @GenIgnore
+  @Deprecated
   public DeploymentOptions setIsolatedClasses(List<String> isolatedClasses) {
     this.isolatedClasses = isolatedClasses;
     return this;
@@ -349,12 +362,61 @@ public class DeploymentOptions {
   }
 
   /**
+   * @return the classloader used for deploying the Verticle
+   */
+  public ClassLoader getClassLoader() {
+    return classLoader;
+  }
+
+  /**
+   * Set the classloader to use for deploying the Verticle.
+   *
+   * <p> The {@code VerticleFactory} will use this classloader for creating the Verticle
+   * and the Verticle {@link io.vertx.core.Context} will set this classloader as context
+   * classloader for the tasks execution on context.
+   *
+   * <p> By default no classloader is required and the deployment will use the current thread context
+   * classloader.
+   *
+   * @param classLoader the loader to use
+   * @return a reference to this, so the API can be used fluently
+   */
+  public DeploymentOptions setClassLoader(ClassLoader classLoader) {
+    this.classLoader = classLoader;
+    return this;
+  }
+
+  /**
+   * Throw {@code IllegalArgumentException} when loader isolation configuration has been defined.
+   */
+  public void checkIsolationNotDefined() {
+    if (getExtraClasspath() != null) {
+      throw new IllegalArgumentException("Can't specify extraClasspath for already created verticle");
+    }
+    if (getIsolationGroup() != null) {
+      throw new IllegalArgumentException("Can't specify isolationGroup for already created verticle");
+    }
+    if (getIsolatedClasses() != null) {
+      throw new IllegalArgumentException("Can't specify isolatedClasses for already created verticle");
+    }
+  }
+
+  /**
    * Convert this to JSON
    *
    * @return  the JSON
    */
   public JsonObject toJson() {
     JsonObject json = new JsonObject();
+    if (extraClasspath != null) {
+      json.put("extraClasspath", new JsonArray(extraClasspath));
+    }
+    if (isolatedClasses != null) {
+      json.put("isolatedClasses", new JsonArray(isolatedClasses));
+    }
+    if (isolationGroup != null) {
+      json.put("isolationGroup", isolationGroup);
+    }
     DeploymentOptionsConverter.toJson(this, json);
     return json;
   }

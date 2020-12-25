@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2020 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -10,22 +10,20 @@
  */
 package io.vertx.core.eventbus.impl;
 
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Promise;
+import io.vertx.core.*;
 import io.vertx.core.eventbus.DeliveryContext;
 import io.vertx.core.eventbus.Message;
-import io.vertx.core.eventbus.impl.clustered.ClusteredMessage;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
+import io.vertx.core.spi.tracing.SpanKind;
 import io.vertx.core.spi.tracing.TagExtractor;
 import io.vertx.core.spi.tracing.VertxTracer;
+import io.vertx.core.tracing.TracingPolicy;
 
 import java.util.Iterator;
 
-abstract class HandlerRegistration<T> {
+public abstract class HandlerRegistration<T> implements Closeable {
 
   private static final Logger log = LoggerFactory.getLogger(HandlerRegistration.class);
 
@@ -46,18 +44,24 @@ abstract class HandlerRegistration<T> {
     this.address = address;
   }
 
-  final void receive(MessageImpl<?, T> msg) {
+  void receive(MessageImpl msg) {
     if (bus.metrics != null) {
       bus.metrics.scheduleMessage(metric, msg.isLocal());
     }
-    doReceive(msg);
+    context.nettyEventLoop().execute(() -> {
+      // Need to check handler is still there - the handler might have been removed after the message were sent but
+      // before it was received
+      if (!doReceive(msg) && bus.metrics != null) {
+        bus.metrics.discardMessage(metric, msg.isLocal(), msg);
+      }
+    });
   }
 
-  protected abstract void doReceive(Message<T> msg);
+  protected abstract boolean doReceive(Message<T> msg);
 
-  protected abstract void doUnregister();
+  protected abstract void dispatch(Message<T> msg, ContextInternal context, Handler<Message<T>> handler);
 
-  synchronized void register(String repliedAddress, boolean localOnly, Handler<AsyncResult<Void>> promise) {
+  synchronized void register(String repliedAddress, boolean localOnly, Promise<Void> promise) {
     if (registered != null) {
       throw new IllegalStateException();
     }
@@ -85,20 +89,25 @@ abstract class HandlerRegistration<T> {
         promise.complete();
       }
     }
-    doUnregister();
     return promise.future();
   }
 
   public void unregister(Handler<AsyncResult<Void>> completionHandler) {
     Future<Void> fut = unregister();
     if (completionHandler != null) {
-      fut.setHandler(completionHandler);
+      fut.onComplete(completionHandler);
     }
   }
 
   void dispatch(Handler<Message<T>> theHandler, Message<T> message, ContextInternal context) {
     InboundDeliveryContext deliveryCtx = new InboundDeliveryContext((MessageImpl<?, T>) message, theHandler, context);
-    deliveryCtx.dispatch();
+    context.dispatch(deliveryCtx::dispatch);
+  }
+
+  void discard(Message<T> msg) {
+    if (bus.metrics != null) {
+      bus.metrics.discardMessage(metric, ((MessageImpl)msg).isLocal(), msg);
+    }
   }
 
   private class InboundDeliveryContext implements DeliveryContext<T> {
@@ -116,9 +125,7 @@ abstract class HandlerRegistration<T> {
     }
 
     void dispatch() {
-      context.dispatch(v -> {
-        next();
-      });
+      next();
     }
 
     @Override
@@ -140,38 +147,20 @@ abstract class HandlerRegistration<T> {
           log.error("Failure in interceptor", t);
         }
       } else {
-        boolean local = true;
-        if (message instanceof ClusteredMessage) {
-          // A bit hacky
-          ClusteredMessage cmsg = (ClusteredMessage)message;
-          if (cmsg.isFromWire()) {
-            local = false;
-          }
-        }
         Object m = metric;
-        try {
-          if (bus.metrics != null) {
-            bus.metrics.beginHandleMessage(m, local);
+        VertxTracer tracer = context.tracer();
+        if (bus.metrics != null) {
+          bus.metrics.messageDelivered(m, message.isLocal());
+        }
+        if (tracer != null && !src) {
+          message.trace = tracer.receiveRequest(context, SpanKind.RPC, TracingPolicy.PROPAGATE, message, message.isSend() ? "send" : "publish", message.headers(), MessageTagExtractor.INSTANCE);
+          HandlerRegistration.this.dispatch(message, context, handler);
+          Object trace = message.trace;
+          if (message.replyAddress == null && trace != null) {
+            tracer.sendResponse(context, null, trace, null, TagExtractor.empty());
           }
-          VertxTracer tracer = context.tracer();
-          if (tracer != null && !src) {
-            message.trace = tracer.receiveRequest(context, message, message.isSend() ? "send" : "publish", message.headers, MessageTagExtractor.INSTANCE);
-            handler.handle(message);
-            if (message.replyAddress == null) {
-              tracer.sendResponse(context, null, message.trace, null, TagExtractor.empty());
-            }
-          } else {
-            handler.handle(message);
-          }
-          if (bus.metrics != null) {
-            bus.metrics.endHandleMessage(m, null);
-          }
-        } catch (Exception e) {
-          log.error("Failed to handleMessage. address: " + message.address(), e);
-          if (bus.metrics != null) {
-            bus.metrics.endHandleMessage(m, e);
-          }
-          context.reportException(e);
+        } else {
+          HandlerRegistration.this.dispatch(message, context, handler);
         }
       }
     }
@@ -185,5 +174,10 @@ abstract class HandlerRegistration<T> {
     public Object body() {
       return message.receivedBody;
     }
+  }
+
+  @Override
+  public void close(Promise<Void> completion) {
+    unregister(completion);
   }
 }

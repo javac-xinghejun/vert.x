@@ -31,11 +31,10 @@ import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.impl.AddressResolver;
 import io.vertx.core.impl.Arguments;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.impl.PromiseInternal;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.net.impl.ConnectionBase;
-import io.vertx.core.net.impl.SocketAddressImpl;
 import io.vertx.core.net.impl.VertxHandler;
 import io.vertx.core.net.impl.transport.Transport;
 import io.vertx.core.spi.metrics.*;
@@ -87,14 +86,14 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   }
 
   private void init() {
-    channel.pipeline().addLast("handler", VertxHandler.create(context, this::createConnection));
+    channel.pipeline().addLast("handler", VertxHandler.create(this::createConnection));
   }
 
   @Override
   public DatagramSocket listenMulticastGroup(String multicastAddress, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = listenMulticastGroup(multicastAddress);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -116,7 +115,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket listenMulticastGroup(String multicastAddress, String networkInterface, String source, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = listenMulticastGroup(multicastAddress, networkInterface, source);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -144,7 +143,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket unlistenMulticastGroup(String multicastAddress, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = unlistenMulticastGroup(multicastAddress);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -166,7 +165,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket unlistenMulticastGroup(String multicastAddress, String networkInterface, String source, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = unlistenMulticastGroup(multicastAddress, networkInterface, source);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -194,7 +193,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket blockMulticastGroup(String multicastAddress, String networkInterface, String sourceToBlock, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = blockMulticastGroup(multicastAddress, networkInterface, sourceToBlock);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return  this;
   }
@@ -222,7 +221,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket blockMulticastGroup(String multicastAddress, String sourceToBlock, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = blockMulticastGroup(multicastAddress, sourceToBlock);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -243,13 +242,13 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   @Override
   public DatagramSocket listen(int port, String address, Handler<AsyncResult<DatagramSocket>> handler) {
     Objects.requireNonNull(handler, "no null handler accepted");
-    listen(new SocketAddressImpl(port, address)).setHandler(handler);
+    listen(SocketAddress.inetSocketAddress(port, address)).onComplete(handler);
     return this;
   }
 
   @Override
   public Future<DatagramSocket> listen(int port, String address) {
-    return listen(new SocketAddressImpl(port, address));
+    return listen(SocketAddress.inetSocketAddress(port, address));
   }
 
   @Override
@@ -329,7 +328,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   public DatagramSocket send(Buffer packet, int port, String host, Handler<AsyncResult<Void>> handler) {
     Future<Void> fut = send(packet, port, host);
     if (handler != null) {
-      fut.setHandler(handler);
+      fut.onComplete(handler);
     }
     return this;
   }
@@ -350,7 +349,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
         if (metrics != null) {
           f2.addListener(fut -> {
             if (fut.isSuccess()) {
-              metrics.bytesWritten(null, new SocketAddressImpl(port, host), packet.length());
+              metrics.bytesWritten(null, SocketAddress.inetSocketAddress(port, host), packet.length());
             }
           });
         }
@@ -391,15 +390,14 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
 
   @Override
   public SocketAddress localAddress() {
-    InetSocketAddress addr = channel.localAddress();
-    return new SocketAddressImpl(addr);
+    return context.owner().transport().convert(channel.localAddress());
   }
 
   @Override
   public void close(Handler<AsyncResult<Void>> handler) {
     Future<Void> future = close();
     if (handler != null) {
-      future.setHandler(handler);
+      future.onComplete(handler);
     }
   }
 
@@ -426,10 +424,6 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
     return metrics;
   }
 
-  private void notifyException(final Handler<AsyncResult<Void>> handler, final Throwable cause) {
-    context.emitFromIO(v -> handler.handle(Future.failedFuture(cause)));
-  }
-
   @Override
   protected void finalize() throws Throwable {
     // Make sure this gets cleaned up if there are no more references to it
@@ -440,13 +434,13 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
   }
 
   private Connection createConnection(ChannelHandlerContext chctx) {
-    return new Connection(context.owner(), chctx, context);
+    return new Connection(context, chctx);
   }
 
   class Connection extends ConnectionBase {
 
-    public Connection(VertxInternal vertx, ChannelHandlerContext channel, ContextInternal context) {
-      super(vertx, channel, context);
+    public Connection(ContextInternal context, ChannelHandlerContext channel) {
+      super(context, channel);
     }
 
     @Override
@@ -483,7 +477,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
         metrics.close();
       }
       if (handler != null) {
-        context.dispatch(handler);
+        context.emit(null, handler);
       }
     }
 
@@ -514,7 +508,7 @@ public class DatagramSocketImpl implements DatagramSocket, MetricsProvider {
         }
       }
       if (handler != null) {
-        context.dispatch(packet, handler);
+        context.emit(packet, handler);
       }
     }
   }

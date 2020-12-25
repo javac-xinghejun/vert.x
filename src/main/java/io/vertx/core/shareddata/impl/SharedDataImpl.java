@@ -14,14 +14,11 @@ package io.vertx.core.shareddata.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.impl.Arguments;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.shareddata.AsyncMap;
-import io.vertx.core.shareddata.Counter;
-import io.vertx.core.shareddata.LocalMap;
-import io.vertx.core.shareddata.Lock;
-import io.vertx.core.shareddata.SharedData;
+import io.vertx.core.shareddata.*;
 import io.vertx.core.spi.cluster.ClusterManager;
 
 import java.io.Serializable;
@@ -55,7 +52,7 @@ public class SharedDataImpl implements SharedData {
   @Override
   public <K, V> void getClusterWideMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    this.<K, V>getClusterWideMap(name).setHandler(resultHandler);
+    this.<K, V>getClusterWideMap(name).onComplete(resultHandler);
   }
 
   @Override
@@ -64,13 +61,15 @@ public class SharedDataImpl implements SharedData {
     if (clusterManager == null) {
       throw new IllegalStateException("Can't get cluster wide map if not clustered");
     }
-    return clusterManager.<K, V>getAsyncMap(name).map(WrappedAsyncMap::new);
+    Promise<AsyncMap<K, V>> promise = vertx.promise();
+    clusterManager.getAsyncMap(name, promise);
+    return promise.future().map(WrappedAsyncMap::new);
   }
 
   @Override
   public <K, V> void getAsyncMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    this.<K, V>getAsyncMap(name).setHandler(resultHandler);
+    this.<K, V>getAsyncMap(name).onComplete(resultHandler);
   }
 
   @Override
@@ -79,7 +78,9 @@ public class SharedDataImpl implements SharedData {
     if (clusterManager == null) {
       return getLocalAsyncMap(name);
     } else {
-      return clusterManager.<K, V>getAsyncMap(name).map(WrappedAsyncMap::new);
+      Promise<AsyncMap<K, V>> promise = vertx.promise();
+      clusterManager.getAsyncMap(name, promise);
+      return promise.future().map(WrappedAsyncMap::new);
     }
   }
 
@@ -96,7 +97,7 @@ public class SharedDataImpl implements SharedData {
   @Override
   public void getLockWithTimeout(String name, long timeout, Handler<AsyncResult<Lock>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    getLockWithTimeout(name, timeout).setHandler(resultHandler);
+    getLockWithTimeout(name, timeout).onComplete(resultHandler);
   }
 
   @Override
@@ -106,7 +107,9 @@ public class SharedDataImpl implements SharedData {
     if (clusterManager == null) {
       return getLocalLockWithTimeout(name, timeout);
     } else {
-      return clusterManager.getLockWithTimeout(name, timeout);
+      Promise<Lock> promise = vertx.promise();
+      clusterManager.getLockWithTimeout(name, timeout, promise);
+      return promise.future();
     }
   }
 
@@ -123,7 +126,7 @@ public class SharedDataImpl implements SharedData {
   @Override
   public void getLocalLockWithTimeout(String name, long timeout, Handler<AsyncResult<Lock>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    getLocalLockWithTimeout(name, timeout).setHandler(resultHandler);
+    getLocalLockWithTimeout(name, timeout).onComplete(resultHandler);
   }
 
   @Override
@@ -139,14 +142,16 @@ public class SharedDataImpl implements SharedData {
     if (clusterManager == null) {
       return getLocalCounter(name);
     } else {
-      return clusterManager.getCounter(name);
+      Promise<Counter> promise = vertx.promise();
+      clusterManager.getCounter(name, promise);
+      return promise.future();
     }
   }
 
   @Override
   public void getCounter(String name, Handler<AsyncResult<Counter>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    getCounter(name).setHandler(resultHandler);
+    getCounter(name).onComplete(resultHandler);
   }
 
   /**
@@ -162,7 +167,7 @@ public class SharedDataImpl implements SharedData {
   @Override
   public <K, V> void getLocalAsyncMap(String name, Handler<AsyncResult<AsyncMap<K, V>>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    this.<K, V>getLocalAsyncMap(name).setHandler(resultHandler);
+    this.<K, V>getLocalAsyncMap(name).onComplete(resultHandler);
   }
 
   @SuppressWarnings("unchecked")
@@ -176,7 +181,7 @@ public class SharedDataImpl implements SharedData {
   @Override
   public void getLocalCounter(String name, Handler<AsyncResult<Counter>> resultHandler) {
     Objects.requireNonNull(resultHandler, "resultHandler");
-    getLocalCounter(name).setHandler(resultHandler);
+    getLocalCounter(name).onComplete(resultHandler);
   }
 
   @Override

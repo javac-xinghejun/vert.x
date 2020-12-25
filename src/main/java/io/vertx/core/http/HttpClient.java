@@ -18,8 +18,9 @@ import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.metrics.Measured;
-import io.vertx.core.net.SocketAddress;
+import io.vertx.core.streams.ReadStream;
 
 import java.util.List;
 import java.util.function.Function;
@@ -56,956 +57,73 @@ import java.util.function.Function;
 public interface HttpClient extends Measured {
 
   /**
-   * Like {@link #request(HttpMethod, RequestOptions)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code options} parameter.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
-   */
-  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options);
-
-  /**
-   * Create an HTTP request to send to the server with the specified options.
+   * Create an HTTP request to send to the server. The {@code handler}
+   * is called when the request is ready to be sent.
    *
-   * @param method  the HTTP method
-   * @param options  the request options
-   * @return  an HTTP client request object
+   * @param options    the request options
+   * @param handler    the handler called when the request is ready to be sent
    */
-  HttpClientRequest request(HttpMethod method, RequestOptions options);
+  void request(RequestOptions options, Handler<AsyncResult<HttpClientRequest>> handler);
 
   /**
-   * Create an HTTP request to send to the server at the specified host and port.
-   * @param method  the HTTP method
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
+   * Like {@link #request(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  HttpClientRequest request(HttpMethod method, int port, String host, String requestURI);
+  Future<HttpClientRequest> request(RequestOptions options);
 
   /**
-   * Like {@link #request(HttpMethod, int, String, String)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code host} and {@code port} parameters.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
-   */
-  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP request to send to the server at the specified host and default port.
-   * @param method  the HTTP method
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest request(HttpMethod method, String host, String requestURI);
-
-  /**
-   * Create an HTTP request to send to the server with the specified options, specifying a response handler to receive
+   * Create an HTTP request to send to the server at the {@code host} and {@code port}. The {@code handler}
+   * is called when the request is ready to be sent.
    *
-   * @param method  the HTTP method
-   * @param options  the request options
-   * @return  an HTTP client request object
+   * @param method     the HTTP method
+   * @param port       the port
+   * @param host       the host
+   * @param requestURI the relative URI
+   * @param handler    the handler called when the request is ready to be sent
    */
-  HttpClientRequest request(HttpMethod method, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  void request(HttpMethod method, int port, String host, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler);
 
   /**
-   * Like {@link #request(HttpMethod, RequestOptions, Handler)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code options} parameter.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   * Like {@link #request(HttpMethod, int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  Future<HttpClientRequest> request(HttpMethod method, int port, String host, String requestURI);
 
   /**
-   * Create an HTTP request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param method  the HTTP method
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
+   * Create an HTTP request to send to the server at the {@code host} and default port. The {@code handler}
+   * is called when the request is ready to be sent.
+   *
+   * @param method     the HTTP method
+   * @param host       the host
+   * @param requestURI the relative URI
+   * @param handler    the handler called when the request is ready to be sent
    */
-  HttpClientRequest request(HttpMethod method, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  void request(HttpMethod method, String host, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler);
 
   /**
-   * Like {@link #request(HttpMethod, int, String, String, Handler)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code host} and {@code port} parameters.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
+   * Like {@link #request(HttpMethod, String, String, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  HttpClientRequest request(HttpMethod method, SocketAddress serverAddress, int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  Future<HttpClientRequest> request(HttpMethod method, String host, String requestURI);
 
   /**
-   * Create an HTTP request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param method  the HTTP method
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
+   * Create an HTTP request to send to the server at the default host and port. The {@code handler}
+   * is called when the request is ready to be sent.
+   *
+   * @param method     the HTTP method
+   * @param requestURI the relative URI
+   * @param handler    the handler called when the request is ready to be sent
    */
-  HttpClientRequest request(HttpMethod method, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  void request(HttpMethod method, String requestURI, Handler<AsyncResult<HttpClientRequest>> handler);
 
   /**
-   * Create an HTTP request to send to the server at the default host and port.
-   * @param method  the HTTP method
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
+   * Like {@link #request(HttpMethod, String, Handler)} but returns a {@code Future} of the asynchronous result
    */
-  HttpClientRequest request(HttpMethod method, String requestURI);
-
-  /**
-   * Create an HTTP request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param method  the HTTP method
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest request(HttpMethod method, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP request to send to the server using an absolute URI
-   * @param method  the HTTP method
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest requestAbs(HttpMethod method, String absoluteURI);
-
-  /**
-   * Like {@link #requestAbs(HttpMethod, String)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code absoluteURI} parameter.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
-   */
-  HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI);
-
-  /**
-   * Create an HTTP request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param method  the HTTP method
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest requestAbs(HttpMethod method, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Like {@link #requestAbs(HttpMethod, String, Handler)} using the {@code serverAddress} parameter to connect to the
-   * server instead of the {@code absoluteURI} parameter.
-   * <p>
-   * The request host header will still be created from the {@code absoluteURI} parameter.
-   * <p>
-   * Use {@link SocketAddress#domainSocketAddress(String)} to connect to a unix domain socket server.
-   */
-  HttpClientRequest requestAbs(HttpMethod method, SocketAddress serverAddress, String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP GET request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(RequestOptions options);
-
-  /**
-   * Create an HTTP GET request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP GET request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(String host, String requestURI);
-
-  /**
-   * Create an HTTP GET request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP GET request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP GET request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP GET request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(String requestURI);
-
-  /**
-   * Create an HTTP GET request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest get(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP GET request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest getAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP GET request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest getAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Sends an HTTP GET request to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient getNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    get(options, responseHandler);
-    return this;
-  }
-
-  /**
-   * Like {@link #getNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> getNow(RequestOptions options) {
-    HttpClientRequest request = get(options);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP GET request to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient getNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    get(port, host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #getNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> getNow(int port, String host, String requestURI) {
-    HttpClientRequest request = get(port, host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP GET request to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient getNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    get(host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #getNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> getNow(String host, String requestURI) {
-    HttpClientRequest request = get(host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP GET request  to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient getNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    get(requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #getNow(String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> getNow(String requestURI) {
-    HttpClientRequest request = get(requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Create an HTTP POST request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(RequestOptions options);
-
-  /**
-   * Create an HTTP POST request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP POST request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(String host, String requestURI);
-
-  /**
-   * Create an HTTP POST request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP POST request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP POST request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP POST request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(String requestURI);
-
-  /**
-   * Create an HTTP POST request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest post(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP POST request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest postAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP POST request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest postAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP HEAD request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(RequestOptions options);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(String host, String requestURI);
-
-  /**
-   * Create an HTTP HEAD request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(String requestURI);
-
-  /**
-   * Create an HTTP HEAD request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest head(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP HEAD request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest headAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP HEAD request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest headAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Sends an HTTP HEAD request to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient headNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    head(options, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #headNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> headNow(RequestOptions options) {
-    HttpClientRequest request = head(options);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP HEAD request to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient headNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    head(port, host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #headNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> headNow(int port, String host, String requestURI) {
-    HttpClientRequest request = head(port, host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP HEAD request to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient headNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    head(host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #headNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> headNow(String host, String requestURI) {
-    HttpClientRequest request = head(host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP HEAD request  to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient headNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    head(requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #headNow(String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> headNow(String requestURI) {
-    HttpClientRequest request = head(requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(RequestOptions options);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(String host, String requestURI);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(String requestURI);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest options(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest optionsAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP OPTIONS request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest optionsAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Sends an HTTP OPTIONS request to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient optionsNow(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    options(options, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #optionsNow(RequestOptions, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> optionsNow(RequestOptions options) {
-    HttpClientRequest request = options(options);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP OPTIONS request to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient optionsNow(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    options(port, host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #optionsNow(int, String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> optionsNow(int port, String host, String requestURI) {
-    HttpClientRequest request = options(port, host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP OPTIONS request to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient optionsNow(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    options(host, requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #optionsNow(String, String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> optionsNow(String host, String requestURI) {
-    HttpClientRequest request = options(host, requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Sends an HTTP OPTIONS request  to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return a reference to this, so the API can be used fluently
-   */
-  @Fluent
-  default HttpClient optionsNow(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler) {
-    options(requestURI, responseHandler).end();
-    return this;
-  }
-
-  /**
-   * Like {@link #optionsNow(String, Handler)} but returns a {@code Future} of the asynchronous result
-   */
-  default Future<HttpClientResponse> optionsNow(String requestURI) {
-    HttpClientRequest request = options(requestURI);
-    request.end();
-    return request;
-  }
-
-  /**
-   * Create an HTTP PUT request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(RequestOptions options);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(String host, String requestURI);
-
-  /**
-   * Create an HTTP PUT request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(String requestURI);
-
-  /**
-   * Create an HTTP PUT request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest put(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP PUT request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest putAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP PUT request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest putAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP DELETE request to send to the server with the specified options.
-   * @param options  the request options
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(RequestOptions options);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the specified host and port.
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(int port, String host, String requestURI);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the specified host and default port.
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(String host, String requestURI);
-
-  /**
-   * Create an HTTP DELETE request to send to the server with the specified options, specifying a response handler to receive
-   * the response
-   * @param options  the request options
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(RequestOptions options, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the specified host and port, specifying a response handler to receive
-   * the response
-   * @param port  the port
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(int port, String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the specified host and default port, specifying a response handler to receive
-   * the response
-   * @param host  the host
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(String host, String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the default host and port.
-   * @param requestURI  the relative URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(String requestURI);
-
-  /**
-   * Create an HTTP DELETE request to send to the server at the default host and port, specifying a response handler to receive
-   * the response
-   * @param requestURI  the relative URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest delete(String requestURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
-
-  /**
-   * Create an HTTP DELETE request to send to the server using an absolute URI
-   * @param absoluteURI  the absolute URI
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest deleteAbs(String absoluteURI);
-
-  /**
-   * Create an HTTP DELETE request to send to the server using an absolute URI, specifying a response handler to receive
-   * the response
-   * @param absoluteURI  the absolute URI
-   * @param responseHandler  the response handler
-   * @return  an HTTP client request object
-   */
-  HttpClientRequest deleteAbs(String absoluteURI, Handler<AsyncResult<HttpClientResponse>> responseHandler);
+  Future<HttpClientRequest> request(HttpMethod method, String requestURI);
 
   /**
    * Connect a WebSocket to the specified port, host and relative request URI
    * @param port  the port
    * @param host  the host
    * @param requestURI  the relative URI
-   * @param handler  handler that will be called with the websocket when connected
+   * @param handler  handler that will be called with the WebSocket when connected
    */
   void webSocket(int port, String host, String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
@@ -1018,7 +136,7 @@ public interface HttpClient extends Measured {
    * Connect a WebSocket to the host and relative request URI and default port
    * @param host  the host
    * @param requestURI  the relative URI
-   * @param handler  handler that will be called with the websocket when connected
+   * @param handler  handler that will be called with the WebSocket when connected
    */
   void webSocket(String host, String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
@@ -1030,7 +148,7 @@ public interface HttpClient extends Measured {
   /**
    * Connect a WebSocket at the relative request URI using the default host and port
    * @param requestURI  the relative URI
-   * @param handler  handler that will be called with the websocket when connected
+   * @param handler  handler that will be called with the WebSocket when connected
    */
   void webSocket(String requestURI, Handler<AsyncResult<WebSocket>> handler);
 
@@ -1053,13 +171,13 @@ public interface HttpClient extends Measured {
 
   /**
    * Connect a WebSocket with the specified absolute url, with the specified headers, using
-   * the specified version of WebSockets, and the specified websocket sub protocols.
+   * the specified version of WebSockets, and the specified WebSocket sub protocols.
    *
    * @param url            the absolute url
    * @param headers        the headers
-   * @param version        the websocket version
+   * @param version        the WebSocket version
    * @param subProtocols   the subprotocols to use
-   * @param handler handler that will be called if websocket connection fails
+   * @param handler handler that will be called if WebSocket connection fails
    */
   void webSocketAbs(String url, MultiMap headers, WebsocketVersion version, List<String> subProtocols, Handler<AsyncResult<WebSocket>> handler);
 
@@ -1096,17 +214,23 @@ public interface HttpClient extends Measured {
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  HttpClient redirectHandler(Function<HttpClientResponse, Future<HttpClientRequest>> handler);
+  HttpClient redirectHandler(Function<HttpClientResponse, Future<RequestOptions>> handler);
 
   /**
    * @return the current redirect handler.
    */
   @GenIgnore
-  Function<HttpClientResponse, Future<HttpClientRequest>> redirectHandler();
+  Function<HttpClientResponse, Future<RequestOptions>> redirectHandler();
 
   /**
    * Close the client. Closing will close down any pooled connections.
    * Clients should always be closed after use.
    */
-  void close();
+  void close(Handler<AsyncResult<Void>> handler);
+
+  /**
+   * Like {@link #close(Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<Void> close();
+
 }

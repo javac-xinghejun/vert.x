@@ -10,20 +10,14 @@
  */
 package io.vertx.core.impl;
 
-import io.netty.util.concurrent.FastThreadLocal;
-import io.netty.util.concurrent.FastThreadLocalThread;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Promise;
-import io.vertx.core.Starter;
-import io.vertx.core.VertxOptions;
+import io.vertx.core.*;
+import io.vertx.core.impl.future.FailedFuture;
+import io.vertx.core.impl.future.PromiseImpl;
+import io.vertx.core.impl.future.PromiseInternal;
+import io.vertx.core.impl.future.SucceededFuture;
 import io.vertx.core.impl.launcher.VertxCommandLauncher;
 
 import java.util.List;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static io.vertx.core.impl.VertxThread.DISABLE_TCCL;
 
@@ -35,77 +29,29 @@ import static io.vertx.core.impl.VertxThread.DISABLE_TCCL;
  */
 abstract class AbstractContext implements ContextInternal {
 
-  static final String THREAD_CHECKS_PROP_NAME = "vertx.threadChecks";
-  static final boolean THREAD_CHECKS = Boolean.getBoolean(THREAD_CHECKS_PROP_NAME);
-
-  static Context context() {
-    Thread current = Thread.currentThread();
-    if (current instanceof VertxThread) {
-      return ((VertxThread) current).context();
-    } else if (current instanceof FastThreadLocalThread) {
-      return holderLocal.get().ctx;
-    }
-    return null;
-  }
-
-  static class Holder implements BlockedThreadChecker.Task {
-
-    BlockedThreadChecker checker;
-    ContextInternal ctx;
-    long startTime = 0;
-    long maxExecTime = VertxOptions.DEFAULT_MAX_EVENT_LOOP_EXECUTE_TIME;
-    TimeUnit maxExecTimeUnit = VertxOptions.DEFAULT_MAX_EVENT_LOOP_EXECUTE_TIME_UNIT;
-
-    @Override
-    public long startTime() {
-      return startTime;
-    }
-
-    @Override
-    public long maxExecTime() {
-      return maxExecTime;
-    }
-
-    @Override
-    public TimeUnit maxExecTimeUnit() {
-      return maxExecTimeUnit;
-    }
-  }
-
-  private static FastThreadLocal<Holder> holderLocal = new FastThreadLocal<Holder>() {
-    @Override
-    protected Holder initialValue() {
-      return new Holder();
-    }
-  };
-
-  /**
-   * Execute the {@code task} on the context.
-   *
-   * @param argument the argument for the {@code task}
-   * @param task the task to execute with the provided {@code argument}
-   */
-  abstract <T> void execute(T argument, Handler<T> task);
-
   @Override
   public abstract boolean isEventLoopContext();
+
+  @Override
+  public final boolean isRunningOnContext() {
+    return Vertx.currentContext() == this && inThread();
+  }
+
+  abstract boolean inThread();
 
   @Override
   public boolean isWorkerContext() {
     return !isEventLoopContext();
   }
 
-  // This is called to execute code where the origin is IO (from Netty probably).
-  // In such a case we should already be on an event loop thread (as Netty manages the event loops)
-  // but check this anyway, then execute directly
   @Override
-  public final void emitFromIO(Handler<Void> handler) {
-    emitFromIO(null, handler);
+  public void emit(Handler<Void> task) {
+    emit(null, task);
   }
 
   @Override
-  public final void schedule(Handler<Void> task) {
-    schedule(null, task);
+  public final void execute(Handler<Void> task) {
+    execute(null, task);
   }
 
   @Override
@@ -115,65 +61,32 @@ abstract class AbstractContext implements ContextInternal {
 
   public final ContextInternal beginDispatch() {
     ContextInternal prev;
-    Thread th = Thread.currentThread();
-    if (th instanceof VertxThread) {
-      prev = ((VertxThread)th).beginDispatch(this);
-    } else {
-      prev = beginNettyThreadDispatch(th);
-    }
+    VertxThread th = (VertxThread) Thread.currentThread();
+    prev = th.beginEmission(this);
     if (!DISABLE_TCCL) {
       th.setContextClassLoader(classLoader());
     }
     return prev;
   }
 
-  private ContextInternal beginNettyThreadDispatch(Thread th) {
-    if (th instanceof FastThreadLocalThread) {
-      Holder holder = holderLocal.get();
-      ContextInternal prev = holder.ctx;
-      if (!ContextImpl.DISABLE_TIMINGS) {
-        if (holder.checker == null) {
-          BlockedThreadChecker checker = owner().blockedThreadChecker();
-          holder.checker = checker;
-          holder.maxExecTime = owner().maxEventLoopExecTime();
-          holder.maxExecTimeUnit = owner().maxEventLoopExecTimeUnit();
-          checker.registerThread(th, holder);
-        }
-        if (holder.ctx == null) {
-          holder.startTime = System.nanoTime();
-        }
-      }
-      holder.ctx = this;
-      return prev;
-    } else {
-      throw new IllegalStateException("Uh oh! context executing with wrong thread! " + th);
-    }
-  }
-
-  public final void endDispatch(ContextInternal prev) {
-    Thread th = Thread.currentThread();
+  public final void endDispatch(ContextInternal previous) {
+    VertxThread th = (VertxThread) Thread.currentThread();
     if (!DISABLE_TCCL) {
-      th.setContextClassLoader(prev != null ? prev.classLoader() : null);
+      th.setContextClassLoader(previous != null ? previous.classLoader() : null);
     }
-    if (th instanceof VertxThread) {
-      ((VertxThread)th).endDispatch(prev);
-    } else {
-      endNettyThreadDispatch(th, prev);
-    }
+    th.endEmission(previous);
   }
 
-  private void endNettyThreadDispatch(Thread th, ContextInternal prev) {
-    if (th instanceof FastThreadLocalThread) {
-      Holder holder = holderLocal.get();
-      holder.ctx = prev;
-      if (!ContextImpl.DISABLE_TIMINGS) {
-        if (holder.ctx == null) {
-          holder.startTime = 0L;
-        }
-      }
-    } else {
-      throw new IllegalStateException("Uh oh! context executing with wrong thread! " + th);
-    }
+  @Override
+  public long setPeriodic(long delay, Handler<Long> handler) {
+    VertxImpl owner = (VertxImpl) owner();
+    return owner.scheduleTimeout(this, handler, delay, true);
+  }
+
+  @Override
+  public long setTimer(long delay, Handler<Long> handler) {
+    VertxImpl owner = (VertxImpl) owner();
+    return owner.scheduleTimeout(this, handler, delay, false);
   }
 
   @Override
@@ -199,35 +112,20 @@ abstract class AbstractContext implements ContextInternal {
     }
   }
 
-  static void checkEventLoopThread() {
-    Thread current = Thread.currentThread();
-    if (!(current instanceof FastThreadLocalThread)) {
-      throw new IllegalStateException("Expected to be on Vert.x thread, but actually on: " + current);
-    } else if ((current instanceof VertxThread) && ((VertxThread) current).isWorker()) {
-      throw new IllegalStateException("Event delivered on unexpected worker thread " + current);
-    }
-  }
-
-  // Run the task asynchronously on this same context
-  @Override
-  public final void runOnContext(Handler<Void> handler) {
-    try {
-      execute(null, handler);
-    } catch (RejectedExecutionException ignore) {
-      // Pool is already shut down
-    }
-  }
-
   @Override
   public final List<String> processArgs() {
-    // As we are maintaining the launcher and starter class, choose the right one.
-    List<String> processArgument = VertxCommandLauncher.getProcessArguments();
-    return processArgument != null ? processArgument : Starter.PROCESS_ARGS;
+    return VertxCommandLauncher.getProcessArguments();
   }
 
   @Override
   public final <T> void executeBlockingInternal(Handler<Promise<T>> action, Handler<AsyncResult<T>> resultHandler) {
     Future<T> fut = executeBlockingInternal(action);
+    setResultHandler(this, fut, resultHandler);
+  }
+
+  @Override
+  public <T> void executeBlockingInternal(Handler<Promise<T>> action, boolean ordered, Handler<AsyncResult<T>> resultHandler) {
+    Future<T> fut = executeBlockingInternal(action, ordered);
     setResultHandler(this, fut, resultHandler);
   }
 
@@ -254,7 +152,7 @@ abstract class AbstractContext implements ContextInternal {
 
   @Override
   public <T> PromiseInternal<T> promise() {
-    return Future.factory.promise(this);
+    return new PromiseImpl<>(this);
   }
 
   @Override
@@ -263,34 +161,29 @@ abstract class AbstractContext implements ContextInternal {
       return (PromiseInternal<T>) handler;
     } else {
       PromiseInternal<T> promise = promise();
-      promise.future().setHandler(handler);
+      promise.future().onComplete(handler);
       return promise;
     }
   }
 
   @Override
   public <T> Future<T> succeededFuture() {
-    return Future.factory.succeededFuture(this);
+    return new SucceededFuture<>(this, null);
   }
 
   @Override
   public <T> Future<T> succeededFuture(T result) {
-    return Future.factory.succeededFuture(this, result);
+    return new SucceededFuture<>(this, result);
   }
 
   @Override
   public <T> Future<T> failedFuture(Throwable failure) {
-    return Future.factory.failedFuture(this, failure);
+    return new FailedFuture<>(this, failure);
   }
 
   @Override
   public <T> Future<T> failedFuture(String message) {
-    return Future.factory.failedFuture(this, message);
-  }
-
-  @Override
-  public final ContextInternal duplicate() {
-    return duplicate(null);
+    return new FailedFuture<>(this, message);
   }
 
   @SuppressWarnings("unchecked")
@@ -325,15 +218,13 @@ abstract class AbstractContext implements ContextInternal {
     return localContextData().remove(key) != null;
   }
 
-  static <T> void setResultHandler(ContextInternal ctx, Future<T> fut, Handler<AsyncResult<T>> resultHandler) {
+  public abstract CloseHooks closeHooks();
+
+  private static <T> void setResultHandler(ContextInternal ctx, Future<T> fut, Handler<AsyncResult<T>> resultHandler) {
     if (resultHandler != null) {
-      fut.setHandler(resultHandler);
+      fut.onComplete(resultHandler);
     } else {
-      fut.setHandler(ar -> {
-        if (ar.failed()) {
-          ctx.reportException(ar.cause());
-        }
-      });
+      fut.onFailure(ctx::reportException);
     }
   }
 }

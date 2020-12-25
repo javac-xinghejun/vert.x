@@ -19,11 +19,8 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http2.*;
-import io.vertx.core.http.HttpServerOptions;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
-import io.vertx.core.Handler;
-import io.vertx.core.net.impl.HandlerHolder;
 import io.vertx.core.net.impl.VertxHandler;
 
 import java.util.Iterator;
@@ -33,17 +30,15 @@ import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.SWITCHING_PROTOCOLS;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
-class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
+public class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
 
-  private final HttpServerChannelInitializer initializer;
-  private final HandlerHolder<? extends Handler<HttpServerConnection>> holder;
+  private final HttpServerWorker initializer;
   private VertxHttp2ConnectionHandler<Http2ServerConnection> handler;
   private final boolean isCompressionSupported;
   private final boolean isDecompressionSupported;
 
-  Http1xUpgradeToH2CHandler(HttpServerChannelInitializer initializer, HandlerHolder<? extends Handler<HttpServerConnection>> holder, boolean isCompressionSupported, boolean isDecompressionSupported) {
+  Http1xUpgradeToH2CHandler(HttpServerWorker initializer, boolean isCompressionSupported, boolean isDecompressionSupported) {
     this.initializer = initializer;
-    this.holder = holder;
     this.isCompressionSupported = isCompressionSupported;
     this.isDecompressionSupported = isDecompressionSupported;
   }
@@ -79,7 +74,7 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
           if (settingsHeader != null) {
             Http2Settings settings = HttpUtils.decodeSettings(settingsHeader);
             if (settings != null) {
-              if (holder != null && holder.context.isEventLoopContext()) {
+              if (initializer.context.isEventLoopContext()) {
                 ChannelPipeline pipeline = ctx.pipeline();
                 DefaultFullHttpResponse res = new DefaultFullHttpResponse(HTTP_1_1, SWITCHING_PROTOCOLS, Unpooled.EMPTY_BUFFER, false);
                 res.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
@@ -92,7 +87,7 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
                 if(isDecompressionSupported) {
                   pipeline.remove("inflater");
                 }
-                handler = initializer.buildHttp2ConnectionHandler(holder.context, holder.handler);
+                handler = initializer.buildHttp2ConnectionHandler(initializer.context, initializer.connectionHandler);
                 pipeline.addLast("handler", handler);
                 handler.serverUpgrade(ctx, settings, request);
                 DefaultHttp2Headers headers = new DefaultHttp2Headers();
@@ -116,7 +111,7 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
           ctx.writeAndFlush(res);
         }
       } else {
-        initializer.configureHttp1(ctx.pipeline(), holder);
+        initializer.configureHttp1(ctx.pipeline());
         ctx.fireChannelRead(msg);
         ctx.pipeline().remove(this);
       }
@@ -129,9 +124,7 @@ class Http1xUpgradeToH2CHandler extends ChannelInboundHandlerAdapter {
           ctx.fireChannelRead(new DefaultHttp2DataFrame(buf, end, 0));
           if (end) {
             ChannelPipeline pipeline = ctx.pipeline();
-            Iterator<Map.Entry<String, ChannelHandler>> iterator = pipeline.iterator();
-            while (iterator.hasNext()) {
-              Map.Entry<String, ChannelHandler> handler = iterator.next();
+            for (Map.Entry<String, ChannelHandler> handler : pipeline) {
               if (handler.getValue() instanceof Http2ConnectionHandler) {
                 // Continue
               } else {

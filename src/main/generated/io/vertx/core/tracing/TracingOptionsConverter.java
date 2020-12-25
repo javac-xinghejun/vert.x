@@ -2,6 +2,7 @@ package io.vertx.core.tracing;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.impl.JsonUtil;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
@@ -15,11 +16,6 @@ public class TracingOptionsConverter {
    static void fromJson(Iterable<java.util.Map.Entry<String, Object>> json, TracingOptions obj) {
     for (java.util.Map.Entry<String, Object> member : json) {
       switch (member.getKey()) {
-        case "enabled":
-          if (member.getValue() instanceof Boolean) {
-            obj.setEnabled((Boolean)member.getValue());
-          }
-          break;
       }
     }
   }
@@ -29,6 +25,5 @@ public class TracingOptionsConverter {
   }
 
    static void toJson(TracingOptions obj, java.util.Map<String, Object> json) {
-    json.put("enabled", obj.isEnabled());
   }
 }

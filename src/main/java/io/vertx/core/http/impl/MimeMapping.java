@@ -576,6 +576,7 @@ public class MimeMapping {
     m.put("zirz", "application/vnd.zul");
     m.put("zaz", "application/vnd.zzazz.deck+xml");
     m.put("vxml", "application/voicexml+xml");
+    m.put("wasm", "application/wasm");
     m.put("wgt", "application/widget");
     m.put("hlp", "application/winhlp");
     m.put("wsdl", "application/wsdl+xml");
@@ -992,6 +993,7 @@ public class MimeMapping {
     m.put("f4v", "video/x-f4v");
     m.put("fli", "video/x-fli");
     m.put("flv", "video/x-flv");
+    m.put("m4a", "audio/x-m4a");
     m.put("m4v", "video/x-m4v");
     m.put("mkv", "video/x-matroska");
     m.put("mk3d", "video/x-matroska");

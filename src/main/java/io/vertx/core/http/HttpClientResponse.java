@@ -11,6 +11,7 @@
 
 package io.vertx.core.http;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.vertx.codegen.annotations.*;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -29,7 +30,7 @@ import java.util.List;
  * or that was set on the {@link io.vertx.core.http.HttpClientRequest} instance.
  * <p>
  * It implements {@link io.vertx.core.streams.ReadStream} so it can be used with
- * {@link io.vertx.core.streams.Pump} to pump data with flow control.
+ * {@link io.vertx.core.streams.Pipe} to pipe data with flow control.
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
@@ -53,6 +54,12 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
 
   @Override
   HttpClientResponse endHandler(Handler<Void> endHandler);
+
+  /**
+   * @return a {@code NetSocket} facade to interact with the HTTP client response.
+   */
+  @CacheReturn
+  NetSocket netSocket();
 
   /**
    * @return the version of the response
@@ -121,7 +128,10 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
    * @param bodyHandler This handler will be called after all the body has been received
    */
   @Fluent
-  HttpClientResponse bodyHandler(Handler<Buffer> bodyHandler);
+  default HttpClientResponse bodyHandler(Handler<Buffer> bodyHandler) {
+    body().onSuccess(bodyHandler);
+    return this;
+  }
 
   /**
    * Same as {@link #body()} but with an {@code handler} called when the operation completes
@@ -129,7 +139,7 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
   @Fluent
   default HttpClientResponse body(Handler<AsyncResult<Buffer>> handler) {
     Future<Buffer> fut = body();
-    fut.setHandler(handler);
+    fut.onComplete(handler);
     return this;
   }
 
@@ -144,6 +154,20 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
   Future<Buffer> body();
 
   /**
+   * Same as {@link #end()} but with an {@code handler} called when the operation completes
+   */
+  default void end(Handler<AsyncResult<Void>> handler) {
+    end().onComplete(handler);
+  }
+
+  /**
+   * Returns a future signaling when the response has been fully received successfully or failed.
+   *
+   * @return a future completed with the body result
+   */
+  Future<Void> end();
+
+  /**
    * Set an custom frame handler. The handler will get notified when the http stream receives an custom HTTP/2
    * frame. HTTP/2 permits extension of the protocol.
    *
@@ -151,21 +175,6 @@ public interface HttpClientResponse extends ReadStream<Buffer> {
    */
   @Fluent
   HttpClientResponse customFrameHandler(Handler<HttpFrame> handler);
-
-  /**
-   * Get a net socket for the underlying connection of this request.
-   * <p>
-   * USE THIS WITH CAUTION! Writing to the socket directly if you don't know what you're doing can easily break the HTTP protocol.
-   * <p>
-   * HTTP/1.1 pipe-lined requests cannot support net socket upgrade.
-   * <p>
-   * One valid use-case for calling this is to receive the {@link io.vertx.core.net.NetSocket} after a HTTP CONNECT was issued to the
-   * remote peer and it responded with a status code of 200.
-   *
-   * @return the net socket
-   */
-  @CacheReturn
-  NetSocket netSocket();
 
   /**
    * @return the corresponding request

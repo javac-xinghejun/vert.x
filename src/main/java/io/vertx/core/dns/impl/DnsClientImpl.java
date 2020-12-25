@@ -16,15 +16,15 @@ import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.InternetProtocolFamily;
 import io.netty.handler.codec.dns.*;
 import io.netty.handler.logging.LoggingHandler;
-import io.netty.util.collection.IntObjectHashMap;
-import io.netty.util.collection.IntObjectMap;
+import io.netty.util.collection.LongObjectHashMap;
+import io.netty.util.collection.LongObjectMap;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.*;
 import io.vertx.core.dns.*;
 import io.vertx.core.dns.DnsResponseCode;
 import io.vertx.core.dns.impl.decoder.RecordDecoder;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.impl.PromiseInternal;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.net.impl.PartialPooledByteBufAllocator;
 import io.vertx.core.net.impl.transport.Transport;
@@ -47,7 +47,7 @@ public final class DnsClientImpl implements DnsClient {
   private static final char[] HEX_TABLE = "0123456789abcdef".toCharArray();
 
   private final VertxInternal vertx;
-  private final IntObjectMap<Query> inProgressMap = new IntObjectHashMap<>();
+  private final LongObjectMap<Query> inProgressMap = new LongObjectHashMap<>();
   private final InetSocketAddress dnsServer;
   private final ContextInternal actualCtx;
   private final DatagramChannel channel;
@@ -63,7 +63,7 @@ public final class DnsClientImpl implements DnsClient {
 
     this.dnsServer = new InetSocketAddress(options.getHost(), options.getPort());
     if (this.dnsServer.isUnresolved()) {
-    	throw new IllegalArgumentException("Cannot resolve the host to a valid ip address");
+      throw new IllegalArgumentException("Cannot resolve the host to a valid ip address");
     }
     this.vertx = vertx;
 
@@ -83,8 +83,8 @@ public final class DnsClientImpl implements DnsClient {
     channel.pipeline().addLast(new SimpleChannelInboundHandler<DnsResponse>() {
       @Override
       protected void channelRead0(ChannelHandlerContext ctx, DnsResponse msg) throws Exception {
-        int id = msg.id();
-        Query query = inProgressMap.get(id);
+        DefaultDnsQuestion question = msg.recordAt(DnsSection.QUESTION);
+        Query query = inProgressMap.get(dnsMessageId(msg.id(), question.name()));
         if (query != null) {
           query.handle(msg);
         }
@@ -94,7 +94,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient lookup4(String name, Handler<AsyncResult<String>> handler) {
-    lookup4(name).setHandler(handler);
+    lookup4(name).onComplete(handler);
     return this;
   }
 
@@ -105,7 +105,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient lookup6(String name, Handler<AsyncResult<String>> handler) {
-    lookup6(name).setHandler(handler);
+    lookup6(name).onComplete(handler);
     return this;
   }
 
@@ -116,7 +116,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient lookup(String name, Handler<AsyncResult<String>> handler) {
-    lookup(name).setHandler(handler);
+    lookup(name).onComplete(handler);
     return this;
   }
 
@@ -127,7 +127,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveA(String name, Handler<AsyncResult<List<String>>> handler) {
-    resolveA(name).setHandler(handler);
+    resolveA(name).onComplete(handler);
     return this;
   }
 
@@ -138,7 +138,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveCNAME(String name, Handler<AsyncResult<List<String> >> handler) {
-    resolveCNAME(name).setHandler(handler);
+    resolveCNAME(name).onComplete(handler);
     return this;
   }
 
@@ -149,7 +149,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveMX(String name, Handler<AsyncResult<List<MxRecord>>> handler) {
-    resolveMX(name).setHandler(handler);
+    resolveMX(name).onComplete(handler);
     return this;
   }
 
@@ -171,7 +171,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveTXT(String name, Handler<AsyncResult<List<String>>> handler) {
-    resolveTXT(name).setHandler(handler);
+    resolveTXT(name).onComplete(handler);
     return this;
   }
 
@@ -182,13 +182,13 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolvePTR(String name, Handler<AsyncResult<String>> handler) {
-    resolvePTR(name).setHandler(handler);
+    resolvePTR(name).onComplete(handler);
     return this;
   }
 
   @Override
   public DnsClient resolveAAAA(String name, Handler<AsyncResult<List<String>>> handler) {
-    resolveAAAA(name).setHandler(handler);
+    resolveAAAA(name).onComplete(handler);
     return this;
   }
 
@@ -204,7 +204,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveNS(String name, Handler<AsyncResult<List<String>>> handler) {
-    resolveNS(name).setHandler(handler);
+    resolveNS(name).onComplete(handler);
     return this;
   }
 
@@ -215,7 +215,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient resolveSRV(String name, Handler<AsyncResult<List<SrvRecord>>> handler) {
-    resolveSRV(name).setHandler(handler);
+    resolveSRV(name).onComplete(handler);
     return this;
   }
 
@@ -255,7 +255,7 @@ public final class DnsClientImpl implements DnsClient {
 
   @Override
   public DnsClient reverseLookup(String address, Handler<AsyncResult<String>> handler) {
-    reverseLookup(address).setHandler(handler);
+    reverseLookup(address).onComplete(handler);
     return this;
   }
 
@@ -279,6 +279,10 @@ public final class DnsClientImpl implements DnsClient {
     return promise.future();
   }
 
+  private long dnsMessageId(int id, String query) {
+    return ((long) query.hashCode() << 16) + (id & 65535);
+  }
+
   // Testing purposes
   public void inProgressQueries(Handler<Integer> handler) {
     actualCtx.runOnContext(v -> {
@@ -296,6 +300,9 @@ public final class DnsClientImpl implements DnsClient {
 
     public Query(String name, DnsRecordType[] types) {
       this.msg = new DatagramDnsQuery(null, dnsServer, ThreadLocalRandom.current().nextInt()).setRecursionDesired(options.isRecursionDesired());
+      if (!name.endsWith(".")) {
+        name += ".";
+      }
       for (DnsRecordType type: types) {
         msg.addRecord(DnsSection.QUESTION, new DefaultDnsQuestion(name, type, DnsRecord.CLASS_IN));
       }
@@ -305,7 +312,7 @@ public final class DnsClientImpl implements DnsClient {
     }
 
     private void fail(Throwable cause) {
-      inProgressMap.remove(msg.id());
+      inProgressMap.remove(dnsMessageId(msg.id(), name));
       if (timerID >= 0) {
         vertx.cancelTimer(timerID);
       }
@@ -315,7 +322,7 @@ public final class DnsClientImpl implements DnsClient {
     void handle(DnsResponse msg) {
       DnsResponseCode code = DnsResponseCode.valueOf(msg.code().intValue());
       if (code == DnsResponseCode.NOERROR) {
-        inProgressMap.remove(msg.id());
+        inProgressMap.remove(dnsMessageId(msg.id(), name));
         if (timerID >= 0) {
           vertx.cancelTimer(timerID);
         }
@@ -338,7 +345,7 @@ public final class DnsClientImpl implements DnsClient {
     }
 
     void run() {
-      inProgressMap.put(msg.id(), this);
+      inProgressMap.put(dnsMessageId(msg.id(), name), this);
       timerID = vertx.setTimer(options.getQueryTimeout(), id -> {
         timerID = -1;
         actualCtx.runOnContext(v -> {
@@ -347,7 +354,7 @@ public final class DnsClientImpl implements DnsClient {
       });
       channel.writeAndFlush(msg).addListener((ChannelFutureListener) future -> {
         if (!future.isSuccess()) {
-          actualCtx.emitFromIO(future.cause(), this::fail);
+          actualCtx.emit(future.cause(), this::fail);
         }
       });
     }

@@ -13,10 +13,10 @@ package io.vertx.core.http;
 
 import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.*;
 import io.vertx.core.net.impl.TrustAllTrustManager;
 import io.vertx.test.core.TestUtils;
+import io.vertx.test.proxy.HAProxy;
 import io.vertx.test.tls.Cert;
 import io.vertx.test.tls.Trust;
 import org.junit.Rule;
@@ -35,7 +35,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -80,6 +80,18 @@ public abstract class HttpTLSTest extends HttpTestBase {
   // Server specifies cert that the client trusts (not trust all)
   public void testTLSClientTrustServerCert() throws Exception {
     testTLS(Cert.NONE, Trust.SERVER_JKS, Cert.SERVER_JKS, Trust.NONE).pass();
+  }
+
+  @Test
+  // Server specifies cert that the client trusts (not trust all)
+  public void testTLSClientTrustServerCertKeyStore() throws Exception {
+    testTLS(Cert.NONE, () -> {
+      JksOptions opts = Trust.SERVER_JKS.get();
+      return new KeyStoreOptions().setType("JKS").setPath(opts.getPath()).setPassword(opts.getPassword());
+    }, () -> {
+      JksOptions opts = Cert.SERVER_JKS.get();
+      return new KeyStoreOptions().setType("JKS").setPath(opts.getPath()).setPassword(opts.getPassword());
+    }, Trust.NONE).pass();
   }
 
   @Test
@@ -679,9 +691,15 @@ public abstract class HttpTLSTest extends HttpTestBase {
   @Test
   // Client provides SNI and server responds with a matching certificate for the indicated server name
   public void testSNIWithHostHeader() throws Exception {
+
     X509Certificate cert = testTLS(Cert.NONE, Trust.SNI_JKS_HOST2, Cert.SNI_JKS, Trust.NONE)
         .serverSni()
-        .requestProvider((client, handler) -> client.post(4043, "localhost", "/somepath", handler).setHost("host2.com:4043"))
+        .requestProvider(client -> client.request(new RequestOptions()
+          .setServer(SocketAddress.inetSocketAddress(4043, "localhost"))
+          .setMethod(HttpMethod.POST)
+          .setPort(4043)
+          .setHost("host2.com")
+          .setURI("/somepath")))
         .pass()
         .clientPeerCert();
     assertEquals("host2.com", TestUtils.cnOf(cert));
@@ -774,8 +792,8 @@ public abstract class HttpTLSTest extends HttpTestBase {
   public void testSNICustomTrustManagerFactoryMapper() throws Exception {
     testTLS(Cert.CLIENT_PEM, Trust.SNI_JKS_HOST2, Cert.SNI_JKS, () -> new TrustOptions() {
       @Override
-      public JsonObject toJson() {
-        throw new UnsupportedOperationException();
+      public Function<String, TrustManager[]> trustManagerMapper(Vertx vertx) throws Exception {
+        return null;
       }
       @Override
       public TrustManagerFactory getTrustManagerFactory(Vertx v) throws Exception {
@@ -814,10 +832,6 @@ public abstract class HttpTLSTest extends HttpTestBase {
   @Test
   public void testSNICustomTrustManagerFactoryMapper2() throws Exception {
     testTLS(Cert.CLIENT_PEM, Trust.SNI_JKS_HOST2, Cert.SNI_JKS, () -> new TrustOptions() {
-      @Override
-      public JsonObject toJson() {
-        throw new UnsupportedOperationException();
-      }
 
       @Override
       public Function<String, TrustManager[]> trustManagerMapper(Vertx v) throws Exception {
@@ -876,10 +890,9 @@ public abstract class HttpTLSTest extends HttpTestBase {
   public void testCustomTrustManagerFactory() throws Exception {
     testTLS(Cert.NONE, () -> new TrustOptions() {
       @Override
-      public JsonObject toJson() {
-        throw new UnsupportedOperationException();
+      public Function<String, TrustManager[]> trustManagerMapper(Vertx vertx) throws Exception {
+        return null;
       }
-
       @Override
       public TrustManagerFactory getTrustManagerFactory(Vertx v) throws Exception {
         return new TrustManagerFactory(new TrustManagerFactorySpi() {
@@ -921,6 +934,7 @@ public abstract class HttpTLSTest extends HttpTestBase {
     boolean serverOpenSSL;
     boolean serverUsesAlpn;
     boolean serverSSL = true;
+    boolean serverUsesProxyProtocol = false;
     ProxyType proxyType;
     boolean useProxyAuth;
     String[] clientEnabledCipherSuites = new String[0];
@@ -928,17 +942,29 @@ public abstract class HttpTLSTest extends HttpTestBase {
     String[] clientEnabledSecureTransportProtocol   = new String[0];
     String[] serverEnabledSecureTransportProtocol   = new String[0];
     private String connectHostname;
+    private Integer connectPort;
     private boolean followRedirects;
     private boolean serverSNI;
     private boolean clientForceSNI;
-    private BiFunction<HttpClient, Handler<AsyncResult<HttpClientResponse>>, HttpClientRequest> requestProvider = (client, handler) -> {
+    private Function<HttpClient, Future<HttpClientRequest>> requestProvider = client -> {
       String httpHost;
       if (connectHostname != null) {
         httpHost = connectHostname;
       } else {
         httpHost = DEFAULT_HTTP_HOST;
       }
-      return client.request(HttpMethod.POST, 4043, httpHost, DEFAULT_TEST_URI, handler);
+
+      int httpPort;
+      if(connectPort != null) {
+        httpPort = connectPort;
+      } else {
+        httpPort = 4043;
+      }
+      return client.request(new RequestOptions()
+        .setMethod(HttpMethod.POST)
+        .setHost(httpHost)
+        .setPort(httpPort)
+        .setURI(DEFAULT_TEST_URI));
     };
     X509Certificate clientPeerCert;
     String indicatedServerName;
@@ -1046,17 +1072,27 @@ public abstract class HttpTLSTest extends HttpTestBase {
       return this;
     }
 
+    TLSTest serverUsesProxyProtocol() {
+      serverUsesProxyProtocol = true;
+      return this;
+    }
+
     TLSTest connectHostname(String connectHostname) {
       this.connectHostname = connectHostname;
       return this;
     }
 
-    TLSTest requestOptions(RequestOptions requestOptions) {
-      this.requestProvider = (client, handler) -> client.request(HttpMethod.POST, requestOptions, handler);
+    TLSTest connectPort(int connectPort) {
+      this.connectPort = connectPort;
       return this;
     }
 
-    TLSTest requestProvider(BiFunction<HttpClient, Handler<AsyncResult<HttpClientResponse>>, HttpClientRequest> requestProvider) {
+    TLSTest requestOptions(RequestOptions requestOptions) {
+      this.requestProvider = client -> client.request(requestOptions);
+      return this;
+    }
+
+    TLSTest requestProvider(Function<HttpClient, Future<HttpClientRequest>> requestProvider) {
       this.requestProvider = requestProvider;
       return this;
     }
@@ -1106,6 +1142,8 @@ public abstract class HttpTLSTest extends HttpTestBase {
       }
       if (clientOpenSSL) {
         options.setOpenSslEngineOptions(new OpenSSLEngineOptions());
+      } else {
+        options.setJdkSslEngineOptions(new JdkSSLEngineOptions());
       }
       if (clientUsesAlpn) {
         options.setUseAlpn(true);
@@ -1150,6 +1188,7 @@ public abstract class HttpTLSTest extends HttpTestBase {
       serverOptions.setUseAlpn(serverUsesAlpn);
       serverOptions.setSsl(serverSSL);
       serverOptions.setSni(serverSNI);
+      serverOptions.setUseProxyProtocol(serverUsesProxyProtocol);
       for (String suite: serverEnabledCipherSuites) {
         serverOptions.addEnabledCipherSuite(suite);
       }
@@ -1192,32 +1231,40 @@ public abstract class HttpTLSTest extends HttpTestBase {
         } else {
           httpHost = DEFAULT_HTTP_HOST;
         }
-        HttpClientRequest req = requestProvider.apply(client, ar2 -> {
-          if (ar2.succeeded()) {
-            HttpClientResponse response = ar2.result();
-            HttpConnection conn = response.request().connection();
-            if (conn.isSsl()) {
-              try {
-                clientPeerCert = conn.peerCertificateChain()[0];
-              } catch (SSLPeerUnverifiedException ignore) {
-              }
-            }
-            if (shouldPass) {
-              response.version();
-              HttpMethod method = response.request().method();
-              if (method == HttpMethod.GET || method == HttpMethod.HEAD) {
-                complete();
+        requestProvider.apply(client).onComplete(ar_ -> {
+          if (ar_.succeeded()) {
+            HttpClientRequest req = ar_.result();
+            req.setFollowRedirects(followRedirects);
+            req.send("foo", ar2 -> {
+              if (ar2.succeeded()) {
+                HttpClientResponse response = ar2.result();
+                HttpConnection conn = response.request().connection();
+                if (conn.isSsl()) {
+                  try {
+                    clientPeerCert = conn.peerCertificateChain()[0];
+                  } catch (SSLPeerUnverifiedException ignore) {
+                  }
+                }
+                if (shouldPass) {
+                  response.version();
+                  HttpMethod method = response.request().getMethod();
+                  if (method == HttpMethod.GET || method == HttpMethod.HEAD) {
+                    complete();
+                  } else {
+                    response.bodyHandler(data -> {
+                      assertEquals("bar", data.toString());
+                      complete();
+                    });
+                  }
+                } else {
+                  HttpTLSTest.this.fail("Should not get a response");
+                }
               } else {
-                response.bodyHandler(data -> {
-                  assertEquals("bar", data.toString());
-                  complete();
-                });
+                System.out.println("HANDLE ME");
               }
-            } else {
-              HttpTLSTest.this.fail("Should not get a response");
-            }
+            });
           } else {
-            Throwable t = ar.cause();
+            Throwable t = ar_.cause();
             if (shouldPass) {
               t.printStackTrace();
               HttpTLSTest.this.fail("Should not throw exception");
@@ -1226,8 +1273,6 @@ public abstract class HttpTLSTest extends HttpTestBase {
             }
           }
         });
-        req.setFollowRedirects(followRedirects);
-        req.end("foo");
       });
       await();
       return this;
@@ -1379,29 +1424,27 @@ public abstract class HttpTLSTest extends HttpTestBase {
     HttpServer server = vertx.createHttpServer(serverOptions);
     server.requestHandler(req -> {
     });
-    try {
-      server.listen();
-      fail("Was expecting a failure");
-    } catch (VertxException e) {
-      Throwable cause = e.getCause();
-      if(expectedSuffix == null) {
-        boolean ok = expectedPossiblePrefixes.isEmpty();
-        for (String expectedPossiblePrefix : expectedPossiblePrefixes) {
-          ok |= expectedPossiblePrefix.equals(cause.getMessage());
-        }
-        if (!ok) {
-          fail("Was expecting <" + cause.getMessage() + ">  to be equals to one of " + expectedPossiblePrefixes);
-        }
-      } else {
-        boolean ok = expectedPossiblePrefixes.isEmpty();
-        for (String expectedPossiblePrefix : expectedPossiblePrefixes) {
-          ok |= cause.getMessage().startsWith(expectedPossiblePrefix);
-        }
-        if (!ok) {
-          fail("Was expecting e.getCause().getMessage() to be prefixed by one of " + expectedPossiblePrefixes);
-        }
-        assertTrue(cause.getMessage().endsWith(expectedSuffix));
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    server.listen(onFailure(failure::set));
+    assertWaitUntil(() -> failure.get() != null);
+    Throwable cause = failure.get().getCause();
+    if(expectedSuffix == null) {
+      boolean ok = expectedPossiblePrefixes.isEmpty();
+      for (String expectedPossiblePrefix : expectedPossiblePrefixes) {
+        ok |= expectedPossiblePrefix.equals(cause.getMessage());
       }
+      if (!ok) {
+        fail("Was expecting <" + cause.getMessage() + ">  to be equals to one of " + expectedPossiblePrefixes);
+      }
+    } else {
+      boolean ok = expectedPossiblePrefixes.isEmpty();
+      for (String expectedPossiblePrefix : expectedPossiblePrefixes) {
+        ok |= cause.getMessage().startsWith(expectedPossiblePrefix);
+      }
+      if (!ok) {
+        fail("Was expecting <" + cause.getMessage() + "> e.getCause().getMessage() to be prefixed by one of " + expectedPossiblePrefixes);
+      }
+      assertTrue(cause.getMessage().endsWith(expectedSuffix));
     }
   }
 
@@ -1523,5 +1566,23 @@ public abstract class HttpTLSTest extends HttpTestBase {
         .connectHostname("doesnt-resolve.host-name").clientTrustAll().clientVerifyHost(false).pass();
     assertNotNull("connection didn't access the proxy", proxy.getLastUri());
     assertEquals("hostname resolved but it shouldn't be", "doesnt-resolve.host-name:4043", proxy.getLastUri());
+  }
+
+  @Test
+  public void testHAProxy() throws Exception {
+    SocketAddress remote = SocketAddress.inetSocketAddress(56324, "192.168.0.1");
+    SocketAddress local = SocketAddress.inetSocketAddress(443, "192.168.0.11");
+    Buffer header = HAProxy.createVersion1TCP4ProtocolHeader(remote, local);
+    HAProxy proxy = new HAProxy("localhost", 4043, header);
+    proxy.start(vertx);
+    try {
+      testTLS(Cert.NONE, Trust.SERVER_JKS, Cert.SERVER_JKS, Trust.NONE)
+        .serverUsesProxyProtocol()
+        .connectHostname(proxy.getHost())
+        .connectPort(proxy.getPort())
+        .pass();
+    } finally {
+      proxy.stop();
+    }
   }
 }

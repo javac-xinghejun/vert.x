@@ -2,6 +2,7 @@ package io.vertx.core.http;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.impl.JsonUtil;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
@@ -15,6 +16,16 @@ public class RequestOptionsConverter {
   public static void fromJson(Iterable<java.util.Map.Entry<String, Object>> json, RequestOptions obj) {
     for (java.util.Map.Entry<String, Object> member : json) {
       switch (member.getKey()) {
+        case "absoluteURI":
+          if (member.getValue() instanceof String) {
+            obj.setAbsoluteURI((String)member.getValue());
+          }
+          break;
+        case "followRedirects":
+          if (member.getValue() instanceof Boolean) {
+            obj.setFollowRedirects((Boolean)member.getValue());
+          }
+          break;
         case "headers":
           if (member.getValue() instanceof JsonObject) {
             ((Iterable<java.util.Map.Entry<String, Object>>)member.getValue()).forEach(entry -> {
@@ -28,6 +39,11 @@ public class RequestOptionsConverter {
             obj.setHost((String)member.getValue());
           }
           break;
+        case "method":
+          if (member.getValue() instanceof String) {
+            obj.setMethod(new io.vertx.core.http.HttpMethod((java.lang.String)member.getValue()));
+          }
+          break;
         case "port":
           if (member.getValue() instanceof Number) {
             obj.setPort(((Number)member.getValue()).intValue());
@@ -36,6 +52,11 @@ public class RequestOptionsConverter {
         case "ssl":
           if (member.getValue() instanceof Boolean) {
             obj.setSsl((Boolean)member.getValue());
+          }
+          break;
+        case "timeout":
+          if (member.getValue() instanceof Number) {
+            obj.setTimeout(((Number)member.getValue()).longValue());
           }
           break;
         case "uri":
@@ -52,13 +73,22 @@ public class RequestOptionsConverter {
   }
 
   public static void toJson(RequestOptions obj, java.util.Map<String, Object> json) {
+    if (obj.getFollowRedirects() != null) {
+      json.put("followRedirects", obj.getFollowRedirects());
+    }
     if (obj.getHost() != null) {
       json.put("host", obj.getHost());
     }
-    json.put("port", obj.getPort());
+    if (obj.getMethod() != null) {
+      json.put("method", obj.getMethod().toJson());
+    }
+    if (obj.getPort() != null) {
+      json.put("port", obj.getPort());
+    }
     if (obj.isSsl() != null) {
       json.put("ssl", obj.isSsl());
     }
+    json.put("timeout", obj.getTimeout());
     if (obj.getURI() != null) {
       json.put("uri", obj.getURI());
     }

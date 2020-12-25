@@ -14,21 +14,17 @@ package io.vertx.core.http.impl;
 import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http.multipart.Attribute;
 import io.netty.handler.codec.http.multipart.HttpPostRequestDecoder;
 import io.netty.handler.codec.http.multipart.InterfaceHttpData;
 import io.netty.handler.codec.http2.Http2Headers;
-import io.netty.handler.codec.http2.Http2Stream;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
-import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.CaseInsensitiveHeaders;
 import io.vertx.core.http.Cookie;
 import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpMethod;
@@ -39,17 +35,18 @@ import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.http.StreamPriority;
 import io.vertx.core.http.StreamResetException;
 import io.vertx.core.http.HttpFrame;
+import io.vertx.core.http.impl.headers.Http2HeadersAdaptor;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.net.impl.ConnectionBase;
-import io.vertx.core.spi.metrics.HttpServerMetrics;
+import io.vertx.core.spi.tracing.SpanKind;
 import io.vertx.core.spi.tracing.VertxTracer;
+import io.vertx.core.tracing.TracingPolicy;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
-import javax.net.ssl.SSLSession;
 import javax.security.cert.X509Certificate;
 import java.net.URISyntaxException;
 import java.nio.channels.ClosedChannelException;
@@ -61,52 +58,57 @@ import java.util.AbstractMap;
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-public class Http2ServerRequestImpl extends Http2ServerStream implements HttpServerRequest {
+public class Http2ServerRequestImpl extends Http2ServerStream implements HttpServerRequest, io.vertx.core.spi.observability.HttpRequest {
 
-  private static final Logger log = LoggerFactory.getLogger(HttpServerRequestImpl.class);
+  private static final Logger log = LoggerFactory.getLogger(Http1xServerRequest.class);
 
   private final String serverOrigin;
   private final MultiMap headersMap;
   private final String scheme;
-  private String path;
-  private String query;
+  private final TracingPolicy tracingPolicy;
+
+  // Accessed on event loop
+  private Object trace;
+
+  // Accessed on context thread
   private MultiMap params;
   private String absoluteURI;
   private MultiMap attributes;
-  private Object trace;
-
-  private Handler<Buffer> dataHandler;
-  private Handler<Void> endHandler;
+  private HttpEventHandler eventHandler;
   private boolean streamEnded;
   private boolean ended;
-
-  private Buffer body;
-  private Promise<Buffer> bodyPromise;
-
   private Handler<HttpServerFileUpload> uploadHandler;
   private HttpPostRequestDecoder postRequestDecoder;
-
-  private Handler<Throwable> exceptionHandler;
   private Handler<HttpFrame> customFrameHandler;
-
   private Handler<StreamPriority> streamPriorityHandler;
 
-  public Http2ServerRequestImpl(Http2ServerConnection conn, ContextInternal context, Http2Stream stream, HttpServerMetrics metrics,
-      String serverOrigin, Http2Headers headers, String contentEncoding, boolean writable, boolean streamEnded) {
-    super(conn, context, stream, headers, contentEncoding, serverOrigin, writable);
+  Http2ServerRequestImpl(Http2ServerConnection conn,
+                         TracingPolicy tracingPolicy,
+                         ContextInternal context,
+                         String serverOrigin,
+                         Http2Headers headers,
+                         String contentEncoding,
+                         boolean streamEnded) {
+    super(conn, context, headers, contentEncoding, serverOrigin);
 
     String scheme = headers.get(":scheme") != null ? headers.get(":scheme").toString() : null;
-
     headers.remove(":method");
     headers.remove(":scheme");
     headers.remove(":path");
     headers.remove(":authority");
-    Http2HeadersAdaptor headersMap = new Http2HeadersAdaptor(headers);
 
     this.serverOrigin = serverOrigin;
     this.streamEnded = streamEnded;
     this.scheme = scheme;
-    this.headersMap = headersMap;
+    this.headersMap = new Http2HeadersAdaptor(headers);
+    this.tracingPolicy = tracingPolicy;
+  }
+
+  private HttpEventHandler eventHandler(boolean create) {
+    if (eventHandler == null && create) {
+      eventHandler = new HttpEventHandler(context);
+    }
+    return eventHandler;
   }
 
   void dispatch(Handler<HttpServerRequest> handler) {
@@ -115,14 +117,14 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
       List<Map.Entry<String, String>> tags = new ArrayList<>();
       tags.add(new AbstractMap.SimpleEntry<>("http.url", absoluteURI()));
       tags.add(new AbstractMap.SimpleEntry<>("http.method", method.name()));
-      trace = tracer.receiveRequest(context, this, method().name(), headers(), HttpUtils.SERVER_REQUEST_TAG_EXTRACTOR);
+      trace = tracer.receiveRequest(context, SpanKind.RPC, tracingPolicy, this, method().name(), headers(), HttpUtils.SERVER_REQUEST_TAG_EXTRACTOR);
     }
-    context.dispatch(this, handler);
+    context.emit(this, handler);
   }
 
   @Override
-  void handleInterestedOpsChanged() {
-    response.writabilityChanged();
+  void handleWritabilityChanged(boolean writable) {
+    response.handlerWritabilityChanged(writable);
   }
 
   @Override
@@ -138,45 +140,46 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   private void notifyException(Throwable failure) {
-    Promise<Buffer> bodyPromise;
-    Handler<Throwable> handler;
     InterfaceHttpData upload = null;
+    HttpEventHandler handler;
     synchronized (conn) {
-      handler = exceptionHandler;
       if (postRequestDecoder != null) {
         upload = postRequestDecoder.currentPartialHttpData();
       }
-      bodyPromise = this.bodyPromise;
-      this.bodyPromise = null;
-      this.body = null;
+      handler = eventHandler;
     }
     if (handler != null) {
-      handler.handle(failure);
+      handler.handleException(failure);
     }
     if (upload instanceof NettyFileUpload) {
       ((NettyFileUpload)upload).handleException(failure);
     }
-    if (bodyPromise != null) {
-      bodyPromise.tryFail(failure);
+  }
+
+  @Override
+  void onClose() {
+    VertxTracer tracer = context.tracer();
+    Object trace = this.trace;
+    if (tracer != null && trace != null) {
+      Throwable failure;
+      synchronized (conn) {
+        if (!streamEnded && (!ended || !response.ended())) {
+          failure = ConnectionBase.CLOSED_EXCEPTION;
+        } else {
+          failure = null;
+        }
+      }
+      tracer.sendResponse(context, failure == null ? response : null, trace, failure, HttpUtils.SERVER_RESPONSE_TAG_EXTRACTOR);
     }
+    super.onClose();
   }
 
   @Override
   void handleClose() {
     super.handleClose();
     boolean notify;
-    Throwable failure;
     synchronized (conn) {
       notify = !streamEnded;
-      if (!streamEnded && (!ended || !response.ended())) {
-        failure = ConnectionBase.CLOSED_EXCEPTION;
-      } else {
-        failure = null;
-      }
-    }
-    VertxTracer tracer = context.tracer();
-    if (tracer != null) {
-      tracer.sendResponse(context, failure == null ? response : null, trace, failure, HttpUtils.SERVER_RESPONSE_TAG_EXTRACTOR);
     }
     if (notify) {
       notifyException(new ClosedChannelException());
@@ -185,9 +188,9 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  void handleCustomFrame(int type, int flags, Buffer buff) {
+  void handleCustomFrame(HttpFrame frame) {
     if (customFrameHandler != null) {
-      customFrameHandler.handle(new HttpFrameImpl(type, flags, buff));
+      customFrameHandler.handle(frame);
     }
   }
 
@@ -199,18 +202,14 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
         handleException(e);
       }
     }
-    if (dataHandler != null) {
-      dataHandler.handle(data);
-    }
-    if (body != null) {
-      body.appendBuffer(data);
+    HttpEventHandler handler = eventHandler;
+    if (handler != null) {
+      handler.handleChunk(data);
     }
   }
 
   void handleEnd(MultiMap trailers) {
-    Promise<Buffer> bodyPromise;
-    Buffer body;
-    Handler<Void> handler;
+    HttpEventHandler handler;
     synchronized (conn) {
       streamEnded = true;
       ended = true;
@@ -237,17 +236,10 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
           postRequestDecoder.destroy();
         }
       }
-      handler = endHandler;
-      body = this.body;
-      bodyPromise = this.bodyPromise;
-      this.body = null;
-      this.bodyPromise = null;
+      handler = eventHandler;
     }
     if (handler != null) {
-      handler.handle(null);
-    }
-    if (body != null) {
-      bodyPromise.tryComplete(body);
+      handler.handleEnd();
     }
   }
 
@@ -273,7 +265,10 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   @Override
   public HttpServerRequest exceptionHandler(Handler<Throwable> handler) {
     synchronized (conn) {
-      exceptionHandler = handler;
+      HttpEventHandler eventHandler = eventHandler(handler != null);
+      if (eventHandler != null) {
+        eventHandler.exceptionHandler(handler);
+      }
     }
     return this;
   }
@@ -284,7 +279,10 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
       if (handler != null) {
         checkEnded();
       }
-      dataHandler = handler;
+      HttpEventHandler eventHandler = eventHandler(handler != null);
+      if (eventHandler != null) {
+        eventHandler.chunkHandler(handler);
+      }
     }
     return this;
   }
@@ -318,7 +316,10 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
       if (handler != null) {
         checkEnded();
       }
-      endHandler = handler;
+      HttpEventHandler eventHandler = eventHandler(handler != null);
+      if (eventHandler != null) {
+        eventHandler.endHandler(handler);
+      }
     }
     return this;
   }
@@ -329,11 +330,6 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  public boolean isSSL() {
-    return conn.isSsl();
-  }
-
-  @Override
   public String uri() {
     return uri;
   }
@@ -341,16 +337,14 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   @Override
   public String path() {
     synchronized (conn) {
-      this.path = uri != null ? HttpUtils.parsePath(uri) : null;
-      return path;
+      return uri != null ? HttpUtils.parsePath(uri) : null;
     }
   }
 
   @Override
   public String query() {
     synchronized (conn) {
-      this.query = uri != null ? HttpUtils.parseQuery(uri) : null;
-      return query;
+      return uri != null ? HttpUtils.parseQuery(uri) : null;
     }
   }
 
@@ -380,16 +374,6 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  public String getHeader(String headerName) {
-    return headers().get(headerName);
-  }
-
-  @Override
-  public String getHeader(CharSequence headerName) {
-    return headers().get(headerName);
-  }
-
-  @Override
   public MultiMap params() {
     synchronized (conn) {
       if (params == null) {
@@ -400,28 +384,13 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  public String getParam(String paramName) {
-    return params().get(paramName);
+  public X509Certificate[] peerCertificateChain() throws SSLPeerUnverifiedException {
+    return conn.peerCertificateChain();
   }
 
   @Override
   public SocketAddress remoteAddress() {
     return conn.remoteAddress();
-  }
-
-  @Override
-  public SocketAddress localAddress() {
-    return conn.localAddress();
-  }
-
-  @Override
-  public SSLSession sslSession() {
-    return conn.sslSession();
-  }
-
-  @Override
-  public X509Certificate[] peerCertificateChain() throws SSLPeerUnverifiedException {
-    return conn.peerCertificateChain();
   }
 
   @Override
@@ -442,7 +411,7 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  public NetSocket netSocket() {
+  public Future<NetSocket> toNetSocket() {
     return response.netSocket();
   }
 
@@ -453,23 +422,21 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
       if (expect) {
         if (postRequestDecoder == null) {
           String contentType = headersMap.get(HttpHeaderNames.CONTENT_TYPE);
-          if (contentType != null) {
-            io.netty.handler.codec.http.HttpMethod method = io.netty.handler.codec.http.HttpMethod.valueOf(rawMethod);
-            String lowerCaseContentType = contentType.toString().toLowerCase();
-            boolean isURLEncoded = lowerCaseContentType.startsWith(HttpHeaderValues.APPLICATION_X_WWW_FORM_URLENCODED.toString());
-            if ((lowerCaseContentType.startsWith(HttpHeaderValues.MULTIPART_FORM_DATA.toString()) || isURLEncoded) &&
-                (method == io.netty.handler.codec.http.HttpMethod.POST ||
-                    method == io.netty.handler.codec.http.HttpMethod.PUT ||
-                    method == io.netty.handler.codec.http.HttpMethod.PATCH ||
-                    method == io.netty.handler.codec.http.HttpMethod.DELETE)) {
-              HttpRequest req = new DefaultHttpRequest(
-                  io.netty.handler.codec.http.HttpVersion.HTTP_1_1,
-                  method,
-                  uri);
-              req.headers().add(HttpHeaderNames.CONTENT_TYPE, contentType);
-              postRequestDecoder = new HttpPostRequestDecoder(new NettyFileUploadDataFactory(context, this, () -> uploadHandler), req);
-            }
+          if (contentType == null) {
+            throw new IllegalStateException("Request must have a content-type header to decode a multipart request");
           }
+          if (!HttpUtils.isValidMultipartContentType(contentType)) {
+            throw new IllegalStateException("Request must have a valid content-type header to decode a multipart request");
+          }
+          if (!HttpUtils.isValidMultipartMethod(method.toNetty())) {
+            throw new IllegalStateException("Request method must be one of POST, PUT, PATCH or DELETE to decode a multipart request");
+          }
+          HttpRequest req = new DefaultHttpRequest(
+            io.netty.handler.codec.http.HttpVersion.HTTP_1_1,
+            method.toNetty(),
+            uri);
+          req.headers().add(HttpHeaderNames.CONTENT_TYPE, contentType);
+          postRequestDecoder = new HttpPostRequestDecoder(new NettyFileUploadDataFactory(context, this, () -> uploadHandler), req);
         }
       } else {
         postRequestDecoder = null;
@@ -501,7 +468,7 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
     synchronized (conn) {
       // Create it lazily
       if (attributes == null) {
-        attributes = new CaseInsensitiveHeaders();
+        attributes = MultiMap.caseInsensitiveMultiMap();
       }
       return attributes;
     }
@@ -513,8 +480,13 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   }
 
   @Override
-  public ServerWebSocket upgrade() {
-    throw new UnsupportedOperationException("HTTP/2 request cannot be upgraded to a websocket");
+  public int streamId() {
+    return stream.id();
+  }
+
+  @Override
+  public Future<ServerWebSocket> toWebSocket() {
+    return context.failedFuture("HTTP/2 request cannot be upgraded to a WebSocket");
   }
 
   @Override
@@ -539,11 +511,18 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
 
   @Override
   public synchronized Future<Buffer> body() {
-    if (bodyPromise == null) {
-      bodyPromise = Promise.promise();
-      body = Buffer.buffer();
-    }
-    return bodyPromise.future();
+    checkEnded();
+    return eventHandler(true).body();
+  }
+
+  @Override
+  public synchronized Future<Void> end() {
+    checkEnded();
+    return eventHandler(true).end();
+  }
+
+  public StreamPriority streamPriority() {
+    return priority();
   }
 
   @Override
@@ -557,36 +536,22 @@ public class Http2ServerRequestImpl extends Http2ServerStream implements HttpSer
   @Override
   void handlePriorityChange(StreamPriority streamPriority) {
     Handler<StreamPriority> handler;
-    boolean priorityChanged = false;
     synchronized (conn) {
       handler = streamPriorityHandler;
-      if (streamPriority != null && !streamPriority.equals(streamPriority())) {
-        priority(streamPriority);
-        priorityChanged = true;
-      }
     }
-    if (handler != null && priorityChanged) {
+    if (handler != null) {
       handler.handle(streamPriority);
     }
   }
 
   @Override
-  public StreamPriority streamPriority() {
-    return priority();
-  }
-
-  @Override
-  public @Nullable Cookie getCookie(String name) {
-    return response.cookies().get(name);
-  }
-
-  @Override
-  public int cookieCount() {
-    return response.cookies().size();
-  }
-
-  @Override
   public Map<String, Cookie> cookieMap() {
     return (Map) response.cookies();
+  }
+
+  @Override
+  public HttpServerRequest routed(String route) {
+    super.routed(route);
+    return this;
   }
 }

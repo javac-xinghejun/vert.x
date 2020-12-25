@@ -18,7 +18,6 @@ import org.junit.Test;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -42,11 +41,11 @@ public abstract class HttpTracingTestBase extends HttpTestBase {
     ctx.runOnContext(v -> {
       Span rootSpan = tracer.newTrace();
       tracer.activate(rootSpan);
-      client.getNow(8080, "localhost", "/1", onSuccess(resp -> {
-        resp.endHandler(v2 -> {
+      client.request(HttpMethod.GET, 8080, "localhost", "/1", onSuccess(req -> {
+        req.send(onSuccess(resp -> {
           assertEquals(rootSpan, tracer.activeSpan());
           assertEquals(200, resp.statusCode());
-        });
+        }));
       }));
     });
     waitUntil(() -> tracer.getFinishedSpans().size() == 2);
@@ -60,13 +59,17 @@ public abstract class HttpTracingTestBase extends HttpTestBase {
       switch (req.path()) {
         case "/1": {
           vertx.setTimer(10, id1 -> {
-            client.getNow(8080, "localhost", "/2", resp1 -> {
-              vertx.setTimer(10, id2 -> {
-                client.getNow(8080, "localhost", "/2", resp2 -> {
-                  req.response().end();
+            client.request(HttpMethod.GET, 8080, "localhost", "/2", onSuccess(req1 -> {
+              req1.send(onSuccess(resp1 -> {
+                vertx.setTimer(10, id2 -> {
+                  client.request(HttpMethod.GET, 8080, "localhost", "/2", onSuccess(req2 -> {
+                    req2.send(onSuccess(resp -> {
+                      req.response().end();
+                    }));
+                  }));
                 });
-              });
-            });
+              }));
+            }));
           });
           break;
         }
@@ -84,11 +87,13 @@ public abstract class HttpTracingTestBase extends HttpTestBase {
     ctx.runOnContext(v -> {
       Span rootSpan = tracer.newTrace();
       tracer.activate(rootSpan);
-      client.getNow(8080, "localhost", "/1", onSuccess(resp -> {
-        resp.endHandler(v2 -> {
-          assertEquals(rootSpan, tracer.activeSpan());
-          assertEquals(200, resp.statusCode());
-        });
+      client.request(HttpMethod.GET, 8080, "localhost", "/1", onSuccess(req -> {
+        req.send(onSuccess(resp -> {
+          resp.endHandler(v2 -> {
+            assertEquals(rootSpan, tracer.activeSpan());
+            assertEquals(200, resp.statusCode());
+          });
+        }));
       }));
     });
     // client request to /1, server request /1, client request /2, server request /2
@@ -98,23 +103,25 @@ public abstract class HttpTracingTestBase extends HttpTestBase {
 
   @Test
   public void testMultipleHttpServerRequest() throws Exception {
-    server.requestHandler(req -> {
+    server.requestHandler(serverReq -> {
       assertNotNull(tracer.activeSpan());
-      switch (req.path()) {
+      switch (serverReq.path()) {
         case "/1": {
           vertx.setTimer(10, id -> {
-            client.getNow(8080, "localhost", "/2", resp -> {
-              req.response().end();
-            });
+            client.request(HttpMethod.GET, 8080, "localhost", "/2", onSuccess(clientReq -> {
+              clientReq.send(onSuccess(resp -> {
+                serverReq.response().end();
+              }));
+            }));
           });
           break;
         }
         case "/2": {
-          req.response().end();
+          serverReq.response().end();
           break;
         }
         default: {
-          req.response().setStatusCode(500).end();
+          serverReq.response().setStatusCode(500).end();
         }
       }
     });
@@ -124,9 +131,11 @@ public abstract class HttpTracingTestBase extends HttpTestBase {
     ctx.runOnContext(v -> {
       Span rootSpan = tracer.newTrace();
       tracer.activate(rootSpan);
-      client.getNow(8080, "localhost", "/1", onSuccess(resp -> {
-        assertEquals(rootSpan, tracer.activeSpan());
-        assertEquals(200, resp.statusCode());
+      client.request(HttpMethod.GET, 8080, "localhost", "/1", onSuccess(req -> {
+        req.send(onSuccess(resp -> {
+          assertEquals(rootSpan, tracer.activeSpan());
+          assertEquals(200, resp.statusCode());
+        }));
       }));
     });
 

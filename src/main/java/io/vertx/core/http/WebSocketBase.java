@@ -85,18 +85,18 @@ public interface WebSocketBase extends ReadStream<Buffer>, WriteStream<Buffer> {
   /**
    * Returns the WebSocket sub protocol selected by the WebSocket handshake.
    * <p/>
-   * On the server, the value will be {@code null} when the handler receives the websocket callback as the
+   * On the server, the value will be {@code null} when the handler receives the WebSocket callback as the
    * handshake will not be completed yet.
    */
   String subProtocol();
 
   /**
-   * Returns the status code received when the WebSocket was closed by the other side, otherwise {@code null}.
+   * Returns the close status code received from the remote endpoint or {@code null} when not yet received.
    */
   Short closeStatusCode();
 
   /**
-   * Returns the reason message received when the WebSocket was closed by the other side, otherwise {@code null}.
+   * Returns the close reason message from the remote endpoint or {@code null} when not yet received.
    */
   String closeReason();
 
@@ -349,13 +349,15 @@ public interface WebSocketBase extends ReadStream<Buffer>, WriteStream<Buffer> {
   void close(short statusCode, @Nullable String reason, Handler<AsyncResult<Void>> handler);
 
   /**
-   * @return the remote address for this socket
+   * @return the remote address for this connection, possibly {@code null} (e.g a server bound on a domain socket).
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the actual connecting client.
    */
   @CacheReturn
   SocketAddress remoteAddress();
 
   /**
-   * @return the local address for this socket
+   * @return the local address for this connection, possibly {@code null} (e.g a server bound on a domain socket)
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the proxy.
    */
   @CacheReturn
   SocketAddress localAddress();

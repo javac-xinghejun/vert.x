@@ -14,10 +14,10 @@ package io.vertx.core.impl;
 import io.netty.channel.EventLoop;
 import io.netty.resolver.AddressResolverGroup;
 import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.dns.AddressResolverOptions;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.launcher.commands.ExecUtils;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -83,7 +83,7 @@ public class AddressResolver {
     io.netty.util.concurrent.Future<InetSocketAddress> fut = resolveHostname(context.nettyEventLoop(), hostname);
     PromiseInternal<InetSocketAddress> promise = context.promise();
     fut.addListener(promise);
-    promise.future().map(InetSocketAddress::getAddress).setHandler(resultHandler);
+    promise.future().map(InetSocketAddress::getAddress).onComplete(resultHandler);
   }
 
   public io.netty.util.concurrent.Future<InetSocketAddress> resolveHostname(EventLoop eventLoop, String hostname) {

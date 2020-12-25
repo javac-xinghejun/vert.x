@@ -11,7 +11,9 @@
 package io.vertx.core.streams;
 
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Promise;
+import io.vertx.core.VertxException;
 import io.vertx.test.core.AsyncTestBase;
 import io.vertx.test.fakestream.FakeStream;
 import org.junit.Test;
@@ -91,12 +93,16 @@ public class PipeTest extends AsyncTestBase {
     Throwable expected = new Throwable();
     FakeStream<Object> src = new FakeStream<>();
     Pipe<Object> pipe = src.pipe();
+    Promise<Void> end = Promise.promise();
+    dst.setEnd(end.future());
     pipe.to(dst, onFailure(err -> {
       assertSame(expected, err);
       assertTrue(dst.isEnded());
+      assertTrue(end.future().isComplete());
       testComplete();
     }));
     src.fail(expected);
+    end.complete();
     await();
   }
 
@@ -117,20 +123,28 @@ public class PipeTest extends AsyncTestBase {
 
   @Test
   public void testEndWriteStreamOnWriteStreamFailure() {
-    Throwable expected = new Throwable();
+    RuntimeException expected = new RuntimeException();
     FakeStream<Object> src = new FakeStream<>();
     Pipe<Object> pipe = src.pipe();
     dst.pause();
+    Promise<Void> end = Promise.promise();
     pipe.to(dst, onFailure(err -> {
       assertFalse(src.isPaused());
       assertSame(expected, err);
-      assertFalse(dst.isEnded());
+      assertTrue(dst.isEnded());
+      assertTrue(end.future().succeeded());
       testComplete();
     }));
     while (!src.isPaused()) {
       src.write(o1);
     }
-    dst.fail(expected);
+    dst.handler(item -> {
+      throw expected;
+    });
+
+    dst.setEnd(end.future());
+    dst.resume();
+    end.complete();
     await();
   }
 
@@ -252,5 +266,19 @@ public class PipeTest extends AsyncTestBase {
     completion.fail(failure);
     assertTrue(ended.get().failed());
     assertEquals(failure, ended.get().cause());
+  }
+
+  @Test
+  public void testPipeCloseFailsTheResult() {
+    FakeStream<Object> src = new FakeStream<>();
+    Pipe<Object> pipe = src.pipe();
+    List<AsyncResult<Void>> res = new ArrayList<>();
+    pipe.to(dst, res::add);
+    assertEquals(Collections.emptyList(), res);
+    pipe.close();
+    assertEquals(1, res.size());
+    AsyncResult<Void> ar = res.get(0);
+    assertTrue(ar.failed());
+    assertEquals(ar.cause().getClass(), VertxException.class);
   }
 }

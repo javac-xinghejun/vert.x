@@ -83,7 +83,7 @@ public class HttpProxy extends TestProxyBase {
           return;
         }
       }
-      lastRequestHeaders = MultiMap.caseInsensitiveMultiMap().addAll(request.headers());
+      lastRequestHeaders = HttpHeaders.headers().addAll(request.headers());
       if (error != 0) {
         request.response().setStatusCode(error).end("proxy request failed");
       } else if (method == HttpMethod.CONNECT) {
@@ -111,14 +111,20 @@ public class HttpProxy extends TestProxyBase {
           }
           NetClientOptions netOptions = new NetClientOptions();
           NetClient netClient = vertx.createNetClient(netOptions);
-          netClient.connect(port, host, result -> {
-            if (result.succeeded()) {
-              NetSocket serverSocket = request.netSocket();
-              NetSocket clientSocket = result.result();
-              serverSocket.closeHandler(v -> clientSocket.close());
-              clientSocket.closeHandler(v -> serverSocket.close());
-              Pump.pump(serverSocket, clientSocket).start();
-              Pump.pump(clientSocket, serverSocket).start();
+          netClient.connect(port, host, ar1 -> {
+            if (ar1.succeeded()) {
+              request.toNetSocket().onComplete(ar2 -> {
+                if (ar2.succeeded()) {
+                  NetSocket serverSocket = ar2.result();
+                  NetSocket clientSocket = ar1.result();
+                  serverSocket.closeHandler(v -> clientSocket.close());
+                  clientSocket.closeHandler(v -> serverSocket.close());
+                  Pump.pump(serverSocket, clientSocket).start();
+                  Pump.pump(clientSocket, serverSocket).start();
+                } else {
+                  // Not handled
+                }
+              });
             } else {
               request.response().setStatusCode(403).end("request failed");
             }
@@ -131,17 +137,30 @@ public class HttpProxy extends TestProxyBase {
           uri = forceUri;
         }
         HttpClient client = vertx.createHttpClient();
-        HttpClientRequest clientRequest = client.getAbs(uri, ar -> {
-          if (ar.succeeded()) {
-            HttpClientResponse resp = ar.result();
+        RequestOptions opts = new RequestOptions();
+        opts.setAbsoluteURI(uri);
+        client.request(opts).compose(req -> {
+          for (String name : request.headers().names()) {
+            if (!name.equals("Proxy-Authorization")) {
+              req.putHeader(name, request.headers().get(name));
+            }
+          }
+          return req.send();
+        }).onComplete(ar1 -> {
+          if (ar1.succeeded()) {
+            HttpClientResponse resp = ar1.result();
             for (String name : resp.headers().names()) {
               request.response().putHeader(name, resp.headers().getAll(name));
             }
-            resp.bodyHandler(body -> {
-              request.response().end(body);
+            resp.body(ar2 -> {
+              if (ar2.succeeded()) {
+                request.response().end(ar2.result());
+              } else {
+                request.response().setStatusCode(500).end(ar2.cause().toString() + " on client request");
+              }
             });
           } else {
-            Throwable e = ar.cause();
+            Throwable e = ar1.cause();
             log.debug("exception", e);
             int status;
             if (e instanceof UnknownHostException) {
@@ -152,12 +171,6 @@ public class HttpProxy extends TestProxyBase {
             request.response().setStatusCode(status).end(e.toString() + " on client request");
           }
         });
-        for (String name : request.headers().names()) {
-          if (!name.equals("Proxy-Authorization")) {
-            clientRequest.putHeader(name, request.headers().getAll(name));
-          }
-        }
-        clientRequest.end();
       } else {
         request.response().setStatusCode(405).end("method not supported");
       }

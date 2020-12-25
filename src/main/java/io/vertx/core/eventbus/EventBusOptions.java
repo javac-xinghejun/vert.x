@@ -13,7 +13,6 @@ package io.vertx.core.eventbus;
 
 import io.vertx.codegen.annotations.DataObject;
 import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.core.VertxOptions;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ClientAuth;
 import io.vertx.core.json.JsonObject;
@@ -31,57 +30,42 @@ import java.util.concurrent.TimeUnit;
 public class EventBusOptions extends TCPSSLOptions {
 
   /**
-   * The default value of whether Vert.x is clustered = false.
+   * The default cluster host = null which means use the same as the cluster manager, if possible.
    */
-  public static final boolean DEFAULT_CLUSTERED = VertxOptions.DEFAULT_CLUSTERED;
+  public static final String DEFAULT_CLUSTER_HOST = null;
 
   /**
-   * The default hostname to use when clustering = "localhost"
+   * The default cluster port = 0 which means assign a random port.
    */
-  public static final String DEFAULT_CLUSTER_HOST = VertxOptions.DEFAULT_CLUSTER_HOST;
+  public static final int DEFAULT_CLUSTER_PORT = 0;
 
   /**
-   * The default port to use when clustering = 0 (meaning assign a random port)
+   * The default cluster public host = null which means use the same as the cluster host.
    */
-  public static final int DEFAULT_CLUSTER_PORT = VertxOptions.DEFAULT_CLUSTER_PORT;
+  public static final String DEFAULT_CLUSTER_PUBLIC_HOST = null;
 
   /**
-   * The default cluster public host to use = null which means use the same as the cluster host
+   * The default cluster public port = -1 which means use the same as the cluster port.
    */
-  public static final String DEFAULT_CLUSTER_PUBLIC_HOST = VertxOptions.DEFAULT_CLUSTER_PUBLIC_HOST;
-
-  /**
-   * The default cluster public port to use = -1 which means use the same as the cluster port
-   */
-  public static final int DEFAULT_CLUSTER_PUBLIC_PORT = VertxOptions.DEFAULT_CLUSTER_PUBLIC_PORT;
+  public static final int DEFAULT_CLUSTER_PUBLIC_PORT = -1;
 
   /**
    * The default value of cluster ping interval = 20000 ms.
    */
-  public static final long DEFAULT_CLUSTER_PING_INTERVAL = VertxOptions.DEFAULT_CLUSTER_PING_INTERVAL;
+  public static final long DEFAULT_CLUSTER_PING_INTERVAL = TimeUnit.SECONDS.toMillis(20);
 
   /**
    * The default value of cluster ping reply interval = 20000 ms.
    */
-  public static final long DEFAULT_CLUSTER_PING_REPLY_INTERVAL = VertxOptions.DEFAULT_CLUSTER_PING_REPLY_INTERVAL;
+  public static final long DEFAULT_CLUSTER_PING_REPLY_INTERVAL = TimeUnit.SECONDS.toMillis(20);
 
-  private boolean clustered = DEFAULT_CLUSTERED;
   private String clusterPublicHost = DEFAULT_CLUSTER_PUBLIC_HOST;
   private int clusterPublicPort = DEFAULT_CLUSTER_PUBLIC_PORT;
   private long clusterPingInterval = DEFAULT_CLUSTER_PING_INTERVAL;
   private long clusterPingReplyInterval = DEFAULT_CLUSTER_PING_REPLY_INTERVAL;
+  private JsonObject clusterNodeMetadata;
 
   // Attributes used to configure the server of the event bus when the event bus is clustered.
-
-  /**
-   * The default port to listen on = 0 (meaning a random ephemeral free port will be chosen)
-   */
-  public static final int DEFAULT_PORT = DEFAULT_CLUSTER_PORT;
-
-  /**
-   * The default host to listen on = "0.0.0.0" (meaning listen on all available interfaces).
-   */
-  public static final String DEFAULT_HOST = DEFAULT_CLUSTER_HOST;
 
   /**
    * The default accept backlog = 1024
@@ -132,10 +116,8 @@ public class EventBusOptions extends TCPSSLOptions {
   public EventBusOptions() {
     super();
 
-    clustered = DEFAULT_CLUSTERED;
-
-    port = DEFAULT_PORT;
-    host = DEFAULT_HOST;
+    port = DEFAULT_CLUSTER_PORT;
+    host = DEFAULT_CLUSTER_HOST;
     acceptBacklog = DEFAULT_ACCEPT_BACKLOG;
     clientAuth = DEFAULT_CLIENT_AUTH;
 
@@ -154,11 +136,11 @@ public class EventBusOptions extends TCPSSLOptions {
   public EventBusOptions(EventBusOptions other) {
     super(other);
 
-    this.clustered = other.clustered;
     this.clusterPublicHost = other.clusterPublicHost;
     this.clusterPublicPort = other.clusterPublicPort;
     this.clusterPingInterval = other.clusterPingInterval;
     this.clusterPingReplyInterval = other.clusterPingReplyInterval;
+    this.clusterNodeMetadata = other.clusterNodeMetadata == null ? null : other.clusterNodeMetadata.copy();
 
     this.port = other.port;
     this.host = other.host;
@@ -237,14 +219,18 @@ public class EventBusOptions extends TCPSSLOptions {
   }
 
   /**
-   * @return the host
+   * @return the host or {@code null} if the clustered eventbus should try to pick one automatically
    */
   public String getHost() {
     return host;
   }
 
   /**
-   * Sets the host.
+   * Sets the host. Defaults to {@code null}.
+   * <p>
+   * When the clustered eventbus starts, it tries to bind to the provided {@code host}.
+   * If {@code host} is {@code null}, then it tries to bind to the same host as the underlying cluster manager.
+   * As a last resort, an address will be picked among the available network interfaces.
    *
    * @param host the host
    * @return a reference to this, so the API can be used fluently
@@ -256,7 +242,7 @@ public class EventBusOptions extends TCPSSLOptions {
   }
 
   /**
-   * @return the port, which can be configured from the {@link VertxOptions#setClusterPort(int)}, or
+   * @return the port, which can be configured from the {@link #setPort(int)}, or
    * using the {@code --cluster-port} command line option.
    * @see NetServerOptions#getPort()
    */
@@ -514,24 +500,6 @@ public class EventBusOptions extends TCPSSLOptions {
   }
 
   /**
-   * @return whether or not the event bus is clustered
-   */
-  public boolean isClustered() {
-    return clustered;
-  }
-
-  /**
-   * Sets whether or not the event bus is clustered.
-   *
-   * @param clustered {@code true} to start the event bus as a clustered event bus.
-   * @return a reference to this, so the API can be used fluently
-   */
-  public EventBusOptions setClustered(boolean clustered) {
-    this.clustered = clustered;
-    return this;
-  }
-
-  /**
    * Set whether all server certificates should be trusted.
    *
    * @param trustAll true if all should be trusted
@@ -665,6 +633,36 @@ public class EventBusOptions extends TCPSSLOptions {
       throw new IllegalArgumentException("clusterPublicPort p must be in range 0 <= p <= 65535");
     }
     this.clusterPublicPort = clusterPublicPort;
+    return this;
+  }
+
+  /**
+   * User-supplied information about this node when Vert.x is clustered.
+   * <p>
+   * The data may be used by the {@link io.vertx.core.spi.cluster.NodeSelector} to select a node for a given message.
+   * For example, it could be used to implement a partioning strategy.
+   * <p>
+   * The default {@link io.vertx.core.spi.cluster.NodeSelector} does not use the node metadata.
+   *
+   * @return user-supplied information about this node when Vert.x is clustered
+   */
+  public JsonObject getClusterNodeMetadata() {
+    return clusterNodeMetadata;
+  }
+
+  /**
+   * Set information about this node when Vert.x is clustered.
+   * <p>
+   * The data may be used by the {@link io.vertx.core.spi.cluster.NodeSelector} to select a node for a given message.
+   * For example, it could be used to implement a partioning strategy.
+   * <p>
+   * The default {@link io.vertx.core.spi.cluster.NodeSelector} does not use the node metadata.
+   *
+   * @param clusterNodeMetadata user-supplied information about this node when Vert.x is clustered
+   * @return a reference to this, so the API can be used fluently
+   */
+  public EventBusOptions setClusterNodeMetadata(JsonObject clusterNodeMetadata) {
+    this.clusterNodeMetadata = clusterNodeMetadata;
     return this;
   }
 }

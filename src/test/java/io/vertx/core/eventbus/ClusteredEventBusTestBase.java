@@ -11,19 +11,23 @@
 
 package io.vertx.core.eventbus;
 
-import io.vertx.core.*;
-import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
+import io.vertx.core.spi.cluster.*;
 import io.vertx.test.core.TestUtils;
 import io.vertx.test.fakecluster.FakeClusterManager;
 import org.junit.Test;
 
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
+import static org.hamcrest.CoreMatchers.is;
 
 
 /**
@@ -186,70 +190,6 @@ public class ClusteredEventBusTestBase extends EventBusTestBase {
   }
 
   @Test
-  public void testSendWhileUnsubscribing() throws Exception {
-    startNodes(2);
-
-    AtomicBoolean unregistered = new AtomicBoolean();
-
-    Verticle sender = new AbstractVerticle() {
-
-      @Override
-      public void start() throws Exception {
-        getVertx().runOnContext(v -> sendMsg());
-      }
-
-      private void sendMsg() {
-        if (!unregistered.get()) {
-          getVertx().eventBus().send("whatever", "marseille");
-          vertx.setTimer(1, id -> {
-            sendMsg();
-          });
-        } else {
-          getVertx().eventBus().request("whatever", "marseille", ar -> {
-            Throwable cause = ar.cause();
-            assertThat(cause, instanceOf(ReplyException.class));
-            ReplyException replyException = (ReplyException) cause;
-            assertEquals(ReplyFailure.NO_HANDLERS, replyException.failureType());
-            testComplete();
-          });
-        }
-      }
-    };
-
-    Verticle receiver = new AbstractVerticle() {
-      boolean unregisterCalled;
-
-      @Override
-      public void start(Promise<Void> startPromise) throws Exception {
-        EventBus eventBus = getVertx().eventBus();
-        MessageConsumer<String> consumer = eventBus.consumer("whatever");
-        consumer.handler(m -> {
-          if (!unregisterCalled) {
-            consumer.unregister(v -> unregistered.set(true));
-            unregisterCalled = true;
-          }
-          m.reply("ok");
-        }).completionHandler(startPromise);
-      }
-    };
-
-    CountDownLatch deployLatch = new CountDownLatch(1);
-    vertices[0].exceptionHandler(this::fail).deployVerticle(receiver, onSuccess(receiverId -> {
-      vertices[1].exceptionHandler(this::fail).deployVerticle(sender, onSuccess(senderId -> {
-        deployLatch.countDown();
-      }));
-    }));
-    awaitLatch(deployLatch);
-
-    await();
-
-    CountDownLatch closeLatch = new CountDownLatch(2);
-    vertices[0].close(v -> closeLatch.countDown());
-    vertices[1].close(v -> closeLatch.countDown());
-    awaitLatch(closeLatch);
-  }
-
-  @Test
   public void testMessageBodyInterceptor() throws Exception {
     String content = TestUtils.randomUnicodeString(13);
     startNodes(2);
@@ -268,6 +208,49 @@ public class ClusteredEventBusTestBase extends EventBusTestBase {
       }
       sc.next();
     }).send("whatever", content, new DeliveryOptions().setCodecName(codec.name()));
+    await();
+  }
+
+  @Test
+  public void testClusteredUnregistration() throws Exception {
+    CountDownLatch updateLatch = new CountDownLatch(3);
+    Supplier<VertxOptions> options = () -> getOptions().setClusterManager(new WrappedClusterManager(getClusterManager()) {
+      @Override
+      public void init(Vertx vertx, NodeSelector nodeSelector) {
+        super.init(vertx, new WrappedNodeSelector(nodeSelector) {
+          @Override
+          public void registrationsUpdated(RegistrationUpdateEvent event) {
+            super.registrationsUpdated(event);
+            if (event.address().equals("foo") && event.registrations().isEmpty()) {
+              updateLatch.countDown();
+            }
+          }
+        });
+      }
+    });
+    startNodes(options.get(), options.get());
+    MessageConsumer<Object> consumer = vertices[0].eventBus().consumer("foo", msg -> msg.reply(msg.body()));
+    consumer.completionHandler(onSuccess(reg -> {
+      vertices[0].eventBus().request("foo", "echo", onSuccess(reply1 -> {
+        assertEquals("echo", reply1.body());
+        vertices[1].eventBus().request("foo", "echo", onSuccess(reply2 -> {
+          assertEquals("echo", reply1.body());
+          consumer.unregister(onSuccess(unreg -> {
+            updateLatch.countDown();
+          }));
+        }));
+      }));
+    }));
+    awaitLatch(updateLatch);
+    vertices[1].eventBus().request("foo", "echo", onFailure(fail1 -> {
+      assertThat(fail1, is(instanceOf(ReplyException.class)));
+      assertEquals(ReplyFailure.NO_HANDLERS, ((ReplyException) fail1).failureType());
+      vertices[0].eventBus().request("foo", "echo", onFailure(fail2 -> {
+        assertThat(fail2, is(instanceOf(ReplyException.class)));
+        assertEquals(ReplyFailure.NO_HANDLERS, ((ReplyException) fail2).failureType());
+        testComplete();
+      }));
+    }));
     await();
   }
 }

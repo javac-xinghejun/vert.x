@@ -16,10 +16,9 @@ import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.ReplyException;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.test.core.Repeat;
+import io.vertx.core.tracing.TracingPolicy;
 import io.vertx.test.core.TestUtils;
 import io.vertx.test.core.VertxTestBase;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.*;
@@ -38,16 +37,16 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
   protected VertxTracer getTracer() {
     return tracer = new VertxTracer() {
       @Override
-      public Object receiveRequest(Context context, Object request, String operation, Iterable headers, TagExtractor tagExtractor) {
-        return tracer.receiveRequest(context, request, operation, headers, tagExtractor);
+      public Object receiveRequest(Context context, SpanKind kind, TracingPolicy policy, Object request, String operation, Iterable headers, TagExtractor tagExtractor) {
+        return tracer.receiveRequest(context, kind, policy, request, operation, headers, tagExtractor);
       }
       @Override
       public void sendResponse(Context context, Object response, Object payload, Throwable failure, TagExtractor tagExtractor) {
         tracer.sendResponse(context, response, payload, failure, tagExtractor);
       }
       @Override
-      public Object sendRequest(Context context, Object request, String operation, BiConsumer headers, TagExtractor tagExtractor) {
-        return tracer.sendRequest(context, request, operation, headers, tagExtractor);
+      public Object sendRequest(Context context, SpanKind kind, TracingPolicy policy, Object request, String operation, BiConsumer headers, TagExtractor tagExtractor) {
+        return tracer.sendRequest(context, kind, policy, request, operation, headers, tagExtractor);
       }
       @Override
       public void receiveResponse(Context context, Object response, Object payload, Throwable failure, TagExtractor tagExtractor) {
@@ -82,7 +81,7 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
     }
 
     @Override
-    public <R> Object receiveRequest(Context context, R request, String operation, Iterable<Map.Entry<String, String>> headers, TagExtractor<R> tagExtractor) {
+    public <R> Object receiveRequest(Context context, SpanKind kind, TracingPolicy policy, R request, String operation, Iterable<Map.Entry<String, String>> headers, TagExtractor<R> tagExtractor) {
       context.putLocal(receiveKey, receiveVal);
       Object body = ((Message)request).body();
       receiveEvents.add("receiveRequest[" + addressOf(request, tagExtractor) + "]");
@@ -98,7 +97,7 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
     }
 
     @Override
-    public <R> Object sendRequest(Context context, R request, String operation, BiConsumer<String, String> headers, TagExtractor<R> tagExtractor) {
+    public <R> Object sendRequest(Context context, SpanKind kind, TracingPolicy policy, R request, String operation, BiConsumer<String, String> headers, TagExtractor<R> tagExtractor) {
       assertSame(sendVal, context.getLocal(sendKey));
       sendEvents.add("sendRequest[" + addressOf(request, tagExtractor) + "]");
       assertTrue(request instanceof Message<?>);
@@ -126,14 +125,15 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
     EventBusTracer ebTracer = new EventBusTracer();
     tracer = ebTracer;
     CountDownLatch latch = new CountDownLatch(1);
-    vertx2.runOnContext(v -> {
+    vertx2.runOnContext(v1 -> {
       Context ctx = vertx2.getOrCreateContext();
       vertx2.eventBus().consumer("the_address", msg -> {
         assertNotSame(Vertx.currentContext(), ctx);
         assertSameEventLoop(ctx, Vertx.currentContext());
         assertEquals("msg", msg.body());
-      });
-      latch.countDown();
+      }).completionHandler(onSuccess(v2 -> {
+        latch.countDown();
+      }));
     });
     awaitLatch(latch);
     vertx1.runOnContext(v -> {
@@ -167,7 +167,7 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
     EventBusTracer ebTracer = new EventBusTracer();
     tracer = ebTracer;
     CountDownLatch latch = new CountDownLatch(1);
-    vertx2.runOnContext(v -> {
+    vertx2.runOnContext(v1 -> {
       Context ctx = vertx2.getOrCreateContext();
       vertx2.eventBus().consumer("the_address", msg -> {
         assertNotSame(ctx, vertx2.getOrCreateContext());
@@ -176,8 +176,9 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
         ConcurrentMap<Object, Object> tracerMap = ((ContextInternal) vertx.getOrCreateContext()).localContextData();
         tracerMap.put(ebTracer.sendKey, ebTracer.sendVal);
         msg.reply("msg_2");
-      });
-      latch.countDown();
+      }).completionHandler(onSuccess(v2 -> {
+        latch.countDown();
+      }));
     });
     awaitLatch(latch);
     vertx1.runOnContext(v -> {
@@ -195,15 +196,19 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
   }
 
   @Test
-  public void testEventBusRequestReplyFailure() {
+  public void testEventBusRequestReplyFailure() throws Exception {
     EventBusTracer ebTracer = new EventBusTracer();
     tracer = ebTracer;
+    CountDownLatch latch = new CountDownLatch(1);
     vertx1.eventBus().consumer("the_address", msg -> {
       assertEquals("msg", msg.body());
       ConcurrentMap<Object, Object> tracerMap = ((ContextInternal) vertx.getOrCreateContext()).localContextData();
       tracerMap.put(ebTracer.sendKey, ebTracer.sendVal);
       msg.fail(10, "it failed");
-    });
+    }).completionHandler(onSuccess(v -> {
+      latch.countDown();
+    }));
+    awaitLatch(latch);
     Context ctx = vertx2.getOrCreateContext();
     ctx.runOnContext(v1 -> {
       ConcurrentMap<Object, Object> tracerMap = ((ContextInternal) ctx).localContextData();
@@ -232,12 +237,16 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
   }
 
   @Test
-  public void testEventBusRequestTimeout() {
+  public void testEventBusRequestTimeout() throws Exception {
     EventBusTracer ebTracer = new EventBusTracer();
     tracer = ebTracer;
+    CountDownLatch latch = new CountDownLatch(1);
     vertx1.eventBus().consumer("the_address", msg -> {
       // Let timeout
-    });
+    }).completionHandler(onSuccess(v -> {
+      latch.countDown();
+    }));
+    awaitLatch(latch);
     Context ctx = vertx2.getOrCreateContext();
     ctx.runOnContext(v1 -> {
       ConcurrentMap<Object, Object> tracerMap = ((ContextInternal) ctx).localContextData();
@@ -255,7 +264,7 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
     EventBusTracer ebTracer = new EventBusTracer();
     tracer = ebTracer;
     CountDownLatch latch = new CountDownLatch(1);
-    vertx2.runOnContext(v -> {
+    vertx2.runOnContext(v1 -> {
       Context ctx = vertx2.getOrCreateContext();
       vertx2.eventBus().consumer("the_address", msg -> {
         Context consumerCtx = vertx2.getOrCreateContext();
@@ -268,8 +277,9 @@ public abstract class EventBusTracerTestBase extends VertxTestBase {
           assertSame(consumerCtx, vertx2.getOrCreateContext());
           assertSameEventLoop(consumerCtx, vertx2.getOrCreateContext());
         });
-      });
-      latch.countDown();
+      }).completionHandler(onSuccess(v2 -> {
+        latch.countDown();
+      }));
     });
     awaitLatch(latch);
     vertx1.runOnContext(v -> {

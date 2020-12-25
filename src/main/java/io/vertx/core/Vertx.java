@@ -23,6 +23,8 @@ import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.impl.ContextInternal;
+import io.vertx.core.impl.VertxFactory;
 import io.vertx.core.impl.resolver.DnsResolverProvider;
 import io.vertx.core.metrics.Measured;
 import io.vertx.core.net.NetClient;
@@ -31,7 +33,6 @@ import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetServerOptions;
 import io.vertx.core.shareddata.SharedData;
 import io.vertx.core.spi.VerticleFactory;
-import io.vertx.core.spi.VertxFactory;
 import io.vertx.core.streams.ReadStream;
 
 import java.util.Set;
@@ -72,7 +73,7 @@ public interface Vertx extends Measured {
    * @return the instance
    */
   static Vertx vertx() {
-    return factory.vertx();
+    return vertx(new VertxOptions());
   }
 
   /**
@@ -82,7 +83,7 @@ public interface Vertx extends Measured {
    * @return the instance
    */
   static Vertx vertx(VertxOptions options) {
-    return factory.vertx(options);
+    return new VertxFactory(options).vertx();
   }
 
   /**
@@ -94,7 +95,7 @@ public interface Vertx extends Measured {
    * @param resultHandler  the result handler that will receive the result
    */
   static void clusteredVertx(VertxOptions options, Handler<AsyncResult<Vertx>> resultHandler) {
-    factory.clusteredVertx(options, resultHandler);
+    new VertxFactory(options).clusteredVertx(resultHandler);
   }
 
   /**
@@ -102,17 +103,17 @@ public interface Vertx extends Measured {
    */
   static Future<Vertx> clusteredVertx(VertxOptions options) {
     Promise<Vertx> promise = Promise.promise();
-    factory.clusteredVertx(options, promise);
+    clusteredVertx(options, promise);
     return promise.future();
   }
 
   /**
    * Gets the current context
    *
-   * @return The current context or null if no current context
+   * @return The current context or {@code null} if there is no current context
    */
   static @Nullable Context currentContext() {
-    return factory.context();
+    return ContextInternal.current();
   }
 
   /**
@@ -622,7 +623,4 @@ public interface Vertx extends Measured {
    */
   @GenIgnore
   @Nullable Handler<Throwable> exceptionHandler();
-
-  @GenIgnore
-  VertxFactory factory = ServiceHelper.loadFactory(VertxFactory.class);
 }

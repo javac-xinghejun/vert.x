@@ -16,6 +16,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.impl.Arguments;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.*;
+import io.vertx.core.tracing.TracingPolicy;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -96,6 +97,11 @@ public class HttpClientOptions extends ClientOptionsBase {
    * worth of data
    */
   public static final int DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE = 65536 * 4;
+
+  /**
+   * The default value for the maximum number of WebSocket = 50
+   */
+  public static final int DEFAULT_MAX_WEBSOCKETS = 50;
 
   /**
    * The default value for host name = "localhost"
@@ -192,6 +198,16 @@ public class HttpClientOptions extends ClientOptionsBase {
    */
   public static final int DEFAULT_POOL_CLEANER_PERIOD = 1000;
 
+  /**
+   * Default WebSocket closing timeout = 10 second
+   */
+  public static final int DEFAULT_WEBSOCKET_CLOSING_TIMEOUT = 10;
+
+  /**
+   * Default tracing control = {@link TracingPolicy#PROPAGATE}
+   */
+  public static final TracingPolicy DEFAULT_TRACING_POLICY = TracingPolicy.PROPAGATE;
+
   private boolean verifyHost = true;
   private int maxPoolSize;
   private boolean keepAlive;
@@ -205,8 +221,9 @@ public class HttpClientOptions extends ClientOptionsBase {
   private int poolCleanerPeriod;
 
   private boolean tryUseCompression;
-  private int maxWebsocketFrameSize;
-  private int maxWebsocketMessageSize;
+  private int maxWebSocketFrameSize;
+  private int maxWebSocketMessageSize;
+  private int maxWebSockets;
   private String defaultHost;
   private int defaultPort;
   private HttpVersion protocolVersion;
@@ -222,12 +239,14 @@ public class HttpClientOptions extends ClientOptionsBase {
   private boolean forceSni;
   private int decoderInitialBufferSize;
 
-  private boolean tryUsePerFrameWebsocketCompression;
-  private boolean tryUsePerMessageWebsocketCompression;
-  private int websocketCompressionLevel;
-  private boolean websocketAllowClientNoContext;
-  private boolean websocketRequestServerNoContext;
+  private boolean tryUsePerFrameWebSocketCompression;
+  private boolean tryUsePerMessageWebSocketCompression;
+  private int webSocketCompressionLevel;
+  private boolean webSocketAllowClientNoContext;
+  private boolean webSocketRequestServerNoContext;
+  private int webSocketClosingTimeout;
 
+  private TracingPolicy tracingPolicy;
 
   /**
    * Default constructor
@@ -255,8 +274,9 @@ public class HttpClientOptions extends ClientOptionsBase {
     this.http2ConnectionWindowSize = other.http2ConnectionWindowSize;
     this.http2KeepAliveTimeout = other.getHttp2KeepAliveTimeout();
     this.tryUseCompression = other.isTryUseCompression();
-    this.maxWebsocketFrameSize = other.maxWebsocketFrameSize;
-    this.maxWebsocketMessageSize = other.maxWebsocketMessageSize;
+    this.maxWebSocketFrameSize = other.maxWebSocketFrameSize;
+    this.maxWebSocketMessageSize = other.maxWebSocketMessageSize;
+    this.maxWebSockets = other.maxWebSockets;
     this.defaultHost = other.defaultHost;
     this.defaultPort = other.defaultPort;
     this.protocolVersion = other.protocolVersion;
@@ -272,11 +292,13 @@ public class HttpClientOptions extends ClientOptionsBase {
     this.forceSni = other.forceSni;
     this.decoderInitialBufferSize = other.getDecoderInitialBufferSize();
     this.poolCleanerPeriod = other.getPoolCleanerPeriod();
-    this.tryUsePerFrameWebsocketCompression = other.tryUsePerFrameWebsocketCompression;
-    this.tryUsePerMessageWebsocketCompression = other.tryUsePerMessageWebsocketCompression;
-    this.websocketAllowClientNoContext = other.websocketAllowClientNoContext;
-    this.websocketCompressionLevel = other.websocketCompressionLevel;
-    this.websocketRequestServerNoContext = other.websocketRequestServerNoContext;
+    this.tryUsePerFrameWebSocketCompression = other.tryUsePerFrameWebSocketCompression;
+    this.tryUsePerMessageWebSocketCompression = other.tryUsePerMessageWebSocketCompression;
+    this.webSocketAllowClientNoContext = other.webSocketAllowClientNoContext;
+    this.webSocketCompressionLevel = other.webSocketCompressionLevel;
+    this.webSocketRequestServerNoContext = other.webSocketRequestServerNoContext;
+    this.webSocketClosingTimeout = other.webSocketClosingTimeout;
+    this.tracingPolicy = other.tracingPolicy;
   }
 
   /**
@@ -313,8 +335,9 @@ public class HttpClientOptions extends ClientOptionsBase {
     http2ConnectionWindowSize = DEFAULT_HTTP2_CONNECTION_WINDOW_SIZE;
     http2KeepAliveTimeout = DEFAULT_HTTP2_KEEP_ALIVE_TIMEOUT;
     tryUseCompression = DEFAULT_TRY_USE_COMPRESSION;
-    maxWebsocketFrameSize = DEFAULT_MAX_WEBSOCKET_FRAME_SIZE;
-    maxWebsocketMessageSize = DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE;
+    maxWebSocketFrameSize = DEFAULT_MAX_WEBSOCKET_FRAME_SIZE;
+    maxWebSocketMessageSize = DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE;
+    maxWebSockets = DEFAULT_MAX_WEBSOCKETS;
     defaultHost = DEFAULT_DEFAULT_HOST;
     defaultPort = DEFAULT_DEFAULT_PORT;
     protocolVersion = DEFAULT_PROTOCOL_VERSION;
@@ -329,12 +352,14 @@ public class HttpClientOptions extends ClientOptionsBase {
     maxRedirects = DEFAULT_MAX_REDIRECTS;
     forceSni = DEFAULT_FORCE_SNI;
     decoderInitialBufferSize = DEFAULT_DECODER_INITIAL_BUFFER_SIZE;
-    tryUsePerFrameWebsocketCompression = DEFAULT_TRY_USE_PER_FRAME_WEBSOCKET_COMPRESSION;
-    tryUsePerMessageWebsocketCompression = DEFAULT_TRY_USE_PER_MESSAGE_WEBSOCKET_COMPRESSION;
-    websocketCompressionLevel = DEFAULT_WEBSOCKET_COMPRESSION_LEVEL;
-    websocketAllowClientNoContext = DEFAULT_WEBSOCKET_ALLOW_CLIENT_NO_CONTEXT;
-    websocketRequestServerNoContext = DEFAULT_WEBSOCKET_REQUEST_SERVER_NO_CONTEXT;
+    tryUsePerFrameWebSocketCompression = DEFAULT_TRY_USE_PER_FRAME_WEBSOCKET_COMPRESSION;
+    tryUsePerMessageWebSocketCompression = DEFAULT_TRY_USE_PER_MESSAGE_WEBSOCKET_COMPRESSION;
+    webSocketCompressionLevel = DEFAULT_WEBSOCKET_COMPRESSION_LEVEL;
+    webSocketAllowClientNoContext = DEFAULT_WEBSOCKET_ALLOW_CLIENT_NO_CONTEXT;
+    webSocketRequestServerNoContext = DEFAULT_WEBSOCKET_REQUEST_SERVER_NO_CONTEXT;
+    webSocketClosingTimeout = DEFAULT_WEBSOCKET_CLOSING_TIMEOUT;
     poolCleanerPeriod = DEFAULT_POOL_CLEANER_PERIOD;
+    tracingPolicy = DEFAULT_TRACING_POLICY;
   }
 
   @Override
@@ -625,6 +650,8 @@ public class HttpClientOptions extends ClientOptionsBase {
    * Set the keep alive timeout for HTTP/2 connections, in seconds.
    * <p/>
    * This value determines how long a connection remains unused in the pool before being evicted and closed.
+   * <p/>
+   * A timeout of {@code 0} means there is no timeout.
    *
    * @param keepAliveTimeout the timeout, in seconds
    * @return a reference to this, so the API can be used fluently
@@ -668,6 +695,8 @@ public class HttpClientOptions extends ClientOptionsBase {
    * Set the keep alive timeout for HTTP/1.x, in seconds.
    * <p/>
    * This value determines how long a connection remains unused in the pool before being evicted and closed.
+   * <p/>
+   * A timeout of {@code 0} means there is no timeout.
    *
    * @param keepAliveTimeout the timeout, in seconds
    * @return a reference to this, so the API can be used fluently
@@ -785,24 +814,23 @@ public class HttpClientOptions extends ClientOptionsBase {
     return this;
   }
 
-
   /**
    * Get the maximum WebSocket frame size to use
    *
    * @return  the max WebSocket frame size
    */
-  public int getMaxWebsocketFrameSize() {
-    return maxWebsocketFrameSize;
+  public int getMaxWebSocketFrameSize() {
+    return maxWebSocketFrameSize;
   }
 
   /**
    * Set the max WebSocket frame size
    *
-   * @param maxWebsocketFrameSize  the max frame size, in bytes
+   * @param maxWebSocketFrameSize  the max frame size, in bytes
    * @return a reference to this, so the API can be used fluently
    */
-  public HttpClientOptions setMaxWebsocketFrameSize(int maxWebsocketFrameSize) {
-    this.maxWebsocketFrameSize = maxWebsocketFrameSize;
+  public HttpClientOptions setMaxWebSocketFrameSize(int maxWebSocketFrameSize) {
+    this.maxWebSocketFrameSize = maxWebSocketFrameSize;
     return this;
   }
 
@@ -811,18 +839,41 @@ public class HttpClientOptions extends ClientOptionsBase {
    *
    * @return  the max WebSocket message size
    */
-  public int getMaxWebsocketMessageSize() {
-    return maxWebsocketMessageSize;
+  public int getMaxWebSocketMessageSize() {
+    return maxWebSocketMessageSize;
   }
 
   /**
    * Set the max WebSocket message size
    *
-   * @param maxWebsocketMessageSize  the max message size, in bytes
+   * @param maxWebSocketMessageSize  the max message size, in bytes
    * @return a reference to this, so the API can be used fluently
    */
-  public HttpClientOptions setMaxWebsocketMessageSize(int maxWebsocketMessageSize) {
-    this.maxWebsocketMessageSize = maxWebsocketMessageSize;
+  public HttpClientOptions setMaxWebSocketMessageSize(int maxWebSocketMessageSize) {
+    this.maxWebSocketMessageSize = maxWebSocketMessageSize;
+    return this;
+  }
+
+  /**
+   * Get the maximum of WebSockets per endpoint.
+   *
+   * @return  the max number of WebSockets
+   */
+  public int getMaxWebSockets() {
+    return maxWebSockets;
+  }
+
+  /**
+   * Set the max number of WebSockets per endpoint.
+   *
+   * @param maxWebSockets  the max value
+   * @return a reference to this, so the API can be used fluently
+   */
+  public HttpClientOptions setMaxWebSockets(int maxWebSockets) {
+    if (maxWebSockets == 0 || maxWebSockets < -1) {
+      throw new IllegalArgumentException("maxWebSockets must be > 0 or -1 (disabled)");
+    }
+    this.maxWebSockets = maxWebSockets;
     return this;
   }
 
@@ -1103,103 +1154,118 @@ public class HttpClientOptions extends ClientOptionsBase {
    * @param offer {@code true} to offer the per-frame deflate compression extension
    * @return a reference to this, so the API can be used fluently
    */
- public HttpClientOptions setTryUsePerFrameWebsocketCompression (boolean offer)
- {
-	 this.tryUsePerFrameWebsocketCompression = offer;
-	 return this;
- }
+  public HttpClientOptions setTryUsePerFrameWebSocketCompression(boolean offer) {
+    this.tryUsePerFrameWebSocketCompression = offer;
+    return this;
+  }
 
- /**
-  * @return {@code true} when the WebSocket per-frame deflate compression extension will be offered
-  */
- public boolean getTryWebsocketDeflateFrameCompression()
- {
-	 return this.tryUsePerFrameWebsocketCompression;
- }
+  /**
+   * @return {@code true} when the WebSocket per-frame deflate compression extension will be offered
+   */
+  public boolean getTryWebSocketDeflateFrameCompression() {
+    return this.tryUsePerFrameWebSocketCompression;
+  }
 
-/**
- * Set whether the client will offer the WebSocket per-message deflate compression extension.
- *
- * @param offer {@code true} to offer the per-message deflate compression extension
- * @return  a reference to this, so the API can be used fluently
- */
- public HttpClientOptions setTryUsePerMessageWebsocketCompression (boolean offer)
- {
-	 this.tryUsePerMessageWebsocketCompression = offer;
-	 return this;
- }
+  /**
+   * Set whether the client will offer the WebSocket per-message deflate compression extension.
+   *
+   * @param offer {@code true} to offer the per-message deflate compression extension
+   * @return a reference to this, so the API can be used fluently
+   */
+  public HttpClientOptions setTryUsePerMessageWebSocketCompression(boolean offer) {
+    this.tryUsePerMessageWebSocketCompression = offer;
+    return this;
+  }
 
- /**
-  * @return {@code true} when the WebSocket per-message deflate compression extension will be offered
-  */
- public boolean getTryUsePerMessageWebsocketCompression()
- {
-	 return this.tryUsePerMessageWebsocketCompression;
- }
+  /**
+   * @return {@code true} when the WebSocket per-message deflate compression extension will be offered
+   */
+  public boolean getTryUsePerMessageWebSocketCompression() {
+    return this.tryUsePerMessageWebSocketCompression;
+  }
 
- /**
-  * Set the Websocket deflate compression level.
-  *
-  * @param compressionLevel the WebSocket deflate compression level
-  * @return a reference to this, so the API can be used fluently
-  */
- public HttpClientOptions setWebsocketCompressionLevel (int compressionLevel)
- {
-	 this.websocketCompressionLevel = compressionLevel;
-	 return this;
- }
+  /**
+   * Set the WebSocket deflate compression level.
+   *
+   * @param compressionLevel the WebSocket deflate compression level
+   * @return a reference to this, so the API can be used fluently
+   */
+  public HttpClientOptions setWebSocketCompressionLevel(int compressionLevel) {
+    this.webSocketCompressionLevel = compressionLevel;
+    return this;
+  }
 
- /**
-  * @return the Websocket deflate compression level
-  */
- public int getWebsocketCompressionLevel()
- {
-	 return this.websocketCompressionLevel;
- }
+  /**
+   * @return the WebSocket deflate compression level
+   */
+  public int getWebSocketCompressionLevel() {
+    return this.webSocketCompressionLevel;
+  }
 
   /**
    * Set whether the {@code client_no_context_takeover} parameter of the WebSocket per-message
    * deflate compression extension will be offered.
    *
    * @param offer {@code true} to offer the {@code client_no_context_takeover} parameter
-   * @return  a reference to this, so the API can be used fluently
+   * @return a reference to this, so the API can be used fluently
    */
- public HttpClientOptions setWebsocketCompressionAllowClientNoContext(boolean offer)
- {
-	 this.websocketAllowClientNoContext = offer;
-	 return this;
- }
+  public HttpClientOptions setWebSocketCompressionAllowClientNoContext(boolean offer) {
+    this.webSocketAllowClientNoContext = offer;
+    return this;
+  }
 
   /**
    * @return {@code true} when the {@code client_no_context_takeover} parameter for the WebSocket per-message
    * deflate compression extension will be offered
    */
- public boolean getWebsocketCompressionAllowClientNoContext()
- {
-	 return this.websocketAllowClientNoContext;
- }
+  public boolean getWebSocketCompressionAllowClientNoContext() {
+    return this.webSocketAllowClientNoContext;
+  }
 
   /**
    * Set whether the {@code server_no_context_takeover} parameter of the WebSocket per-message
    * deflate compression extension will be offered.
    *
    * @param offer {@code true} to offer the {@code server_no_context_takeover} parameter
-   * @return  a reference to this, so the API can be used fluently
+   * @return a reference to this, so the API can be used fluently
    */
- public HttpClientOptions setWebsocketCompressionRequestServerNoContext(boolean offer)
- {
-	this.websocketRequestServerNoContext = offer;
-	return this;
- }
+  public HttpClientOptions setWebSocketCompressionRequestServerNoContext(boolean offer) {
+    this.webSocketRequestServerNoContext = offer;
+    return this;
+  }
 
   /**
-   * @return {@code true} when the {@code server_no_context_takeover} parameter for the Websocket per-message
+   * @return {@code true} when the {@code server_no_context_takeover} parameter for the WebSocket per-message
    * deflate compression extension will be offered
    */
- public boolean getWebsocketCompressionRequestServerNoContext()
- {
-	 return this.websocketRequestServerNoContext;
- }
+  public boolean getWebSocketCompressionRequestServerNoContext() {
+    return this.webSocketRequestServerNoContext;
+  }
+
+  /**
+   * @return the amount of time (in seconds) a client WebSocket will wait until it closes TCP connection after receiving a close frame
+   */
+  public int getWebSocketClosingTimeout() {
+    return webSocketClosingTimeout;
+  }
+
+  /**
+   * Set the amount of time a client WebSocket will wait until it closes the TCP connection after receiving a close frame.
+   *
+   * <p> When a WebSocket is closed, the server should close the TCP connection. This timeout will close
+   * the TCP connection on the client when it expires.
+   *
+   * <p> Set to {@code 0L} closes the TCP connection immediately after receiving the close frame.
+   *
+   * <p> Set to a negative value to disable it.
+   *
+   * @param webSocketClosingTimeout the timeout is seconds
+   * @return a reference to this, so the API can be used fluently
+   */
+  public HttpClientOptions setWebSocketClosingTimeout(int webSocketClosingTimeout) {
+    this.webSocketClosingTimeout = webSocketClosingTimeout;
+    return this;
+  }
 
   /**
    * @return the initial buffer size for the HTTP decoder
@@ -1234,6 +1300,24 @@ public class HttpClientOptions extends ClientOptionsBase {
    */
   public HttpClientOptions setPoolCleanerPeriod(int poolCleanerPeriod) {
     this.poolCleanerPeriod = poolCleanerPeriod;
+    return this;
+  }
+
+  /**
+   * @return the tracing policy
+   */
+  public TracingPolicy getTracingPolicy() {
+    return tracingPolicy;
+  }
+
+  /**
+   * Set the tracing policy for the client behavior when Vert.x has tracing enabled.
+   *
+   * @param tracingPolicy the tracing policy
+   * @return a reference to this, so the API can be used fluently
+   */
+  public HttpClientOptions setTracingPolicy(TracingPolicy tracingPolicy) {
+    this.tracingPolicy = tracingPolicy;
     return this;
   }
 }

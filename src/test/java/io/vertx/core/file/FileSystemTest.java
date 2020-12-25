@@ -13,11 +13,7 @@ package io.vertx.core.file;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Promise;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.file.impl.AsyncFileImpl;
 import io.vertx.core.impl.Utils;
@@ -1132,6 +1128,24 @@ public class FileSystemTest extends VertxTestBase {
   }
 
   @Test
+  public void testCloseFileAfterFailure() {
+    if (!vertx.fileSystem().existsBlocking("/dev/full")) {
+      throw new AssumptionViolatedException("/dev/full special device file is not available");
+    }
+    AsyncFile asyncFile = vertx.fileSystem().openBlocking("/dev/full", new OpenOptions());
+
+    int loops = 100;
+    waitFor(loops + 1);
+
+    for (int i = 0; i < loops; i++) {
+      asyncFile.write(TestUtils.randomBuffer(256), onFailure(write -> complete()));
+    }
+    asyncFile.close(onSuccess(close -> complete()));
+
+    await();
+  }
+
+  @Test
   public void testWriteEmptyAsync() {
     String fileName = "some-file.dat";
     vertx.fileSystem().open(testDir + pathSep + fileName, new OpenOptions(), onSuccess(file -> {
@@ -1397,7 +1411,7 @@ public class FileSystemTest extends VertxTestBase {
           buff.appendBuffer(chunk);
           inProgress.incrementAndGet();
           Future<Void> fut = strategy.handle(rs);
-          fut.setHandler(v -> {
+          fut.onComplete(v -> {
             inProgress.decrementAndGet();
             checkEnd.run();
           });
@@ -1486,7 +1500,7 @@ public class FileSystemTest extends VertxTestBase {
 
   @Test
   public void testReadStreamSetReadLength() throws Exception {
-	String fileName = "some-file.dat";
+    String fileName = "some-file.dat";
     int chunkSize = 1000;
     int chunks = 10;
     byte[] content = TestUtils.randomByteArray(chunkSize * chunks);
@@ -1820,6 +1834,33 @@ public class FileSystemTest extends VertxTestBase {
         assertFalse(drainAfterClose.get());
         testComplete();
       });
+    }));
+    await();
+  }
+
+  @Test
+  public void testDrainSetOnce() {
+    String fileName = "some-file.dat";
+    Buffer buff = TestUtils.randomBuffer(1024);
+    vertx.fileSystem().open(testDir + pathSep + fileName, new OpenOptions(), onSuccess(file -> {
+      file.setWriteQueueMaxSize(1024 * 4);
+      Context ctx = Vertx.currentContext();
+      assertNotNull(ctx);
+      AtomicInteger times = new AtomicInteger(7);
+      file.drainHandler(v -> {
+        assertSame(ctx, Vertx.currentContext());
+        if (times.decrementAndGet() > 0) {
+          while (!file.writeQueueFull()) {
+            file.write(buff);
+          }
+        } else {
+          assertEquals(0, times.get());
+          testComplete();
+        }
+      });
+      while (!file.writeQueueFull()) {
+        file.write(buff);
+      }
     }));
     await();
   }

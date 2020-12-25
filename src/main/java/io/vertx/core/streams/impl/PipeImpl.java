@@ -55,6 +55,12 @@ public class PipeImpl<T> implements Pipe<T> {
     return this;
   }
 
+  private void handleWriteResult(AsyncResult<Void> ack) {
+    if (ack.failed()) {
+      result.tryFail(new WriteException(ack.cause()));
+    }
+  }
+
   @Override
   public void to(WriteStream<T> ws, Handler<AsyncResult<Void>> completionHandler) {
     if (ws == null) {
@@ -72,15 +78,14 @@ public class PipeImpl<T> implements Pipe<T> {
     }
     Handler<Void> drainHandler = v -> src.resume();
     src.handler(item -> {
-      ws.write(item);
+      ws.write(item, this::handleWriteResult);
       if (ws.writeQueueFull()) {
         src.pause();
         ws.drainHandler(drainHandler);
       }
     });
-    ws.exceptionHandler(err -> result.tryFail(new WriteException(err)));
     src.resume();
-    result.future().setHandler(ar -> {
+    result.future().onComplete(ar -> {
       try {
         src.handler(null);
       } catch (Exception ignore) {
@@ -93,30 +98,36 @@ public class PipeImpl<T> implements Pipe<T> {
         src.endHandler(null);
       } catch (Exception ignore) {
       }
-      try {
-        if (ar.succeeded()) {
-          if (endOnSuccess) {
-            ws.end(completionHandler);
-            return;
-          }
-        } else {
-          Throwable err = ar.cause();
-          if (err instanceof WriteException) {
-            ar = Future.failedFuture(err.getCause());
-            src.resume();
-          } else if (endOnFailure){
-            ws.end();
-          }
+      if (ar.succeeded()) {
+        handleSuccess(completionHandler);
+      } else {
+        Throwable err = ar.cause();
+        if (err instanceof WriteException) {
+          src.resume();
+          err = err.getCause();
         }
-      } catch (Exception e) {
-        if (endOnFailure) {
-          ws.end();
-        }
-        completionHandler.handle(Future.failedFuture(e));
-        return;
+        handleFailure(err, completionHandler);
       }
-      completionHandler.handle(ar);
     });
+  }
+
+  private void handleSuccess(Handler<AsyncResult<Void>> completionHandler) {
+    if (endOnSuccess) {
+      dst.end(completionHandler);
+    } else {
+      completionHandler.handle(Future.succeededFuture());
+    }
+  }
+
+  private void handleFailure(Throwable cause, Handler<AsyncResult<Void>> completionHandler) {
+    Future<Void> res = Future.failedFuture(cause);
+    if (endOnFailure){
+      dst.end(ignore -> {
+        completionHandler.handle(res);
+      });
+    } else {
+      completionHandler.handle(res);
+    }
   }
 
   public void close() {
@@ -127,11 +138,11 @@ public class PipeImpl<T> implements Pipe<T> {
         dst.drainHandler(null);
         dst.exceptionHandler(null);
       }
-      if (result.future().isComplete()) {
-        return;
-      }
     }
-    src.resume();
+    VertxException err = new VertxException("Pipe closed", true);
+    if (result.tryFail(err)) {
+      src.resume();
+    }
   }
 
   private static class WriteException extends VertxException {

@@ -47,7 +47,6 @@ public class LoggerFactory {
     }
     if (loader.getResource("vertx-default-jul-logging.properties") == null) {
       if (configureWith("SLF4J", true, loader)
-        || configureWith("Log4j", true, loader)
         || configureWith("Log4j2", true, loader)) {
         return;
       }
@@ -61,6 +60,9 @@ public class LoggerFactory {
     try {
       Class<?> clazz = Class.forName(shortName ? "io.vertx.core.logging." + name + "LogDelegateFactory" : name, true, loader);
       LogDelegateFactory factory = (LogDelegateFactory) clazz.newInstance();
+      if (!factory.isAvailable()) {
+        return false;
+      }
       factory.createDelegate(loggerName).debug("Using " + factory.getClass().getName());
       delegateFactory = factory;
       return true;

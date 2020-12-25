@@ -3,9 +3,6 @@
 
 There are several objects in Vert.x that allow items to be read from and written.
 
-In previous versions the `io.vertx.core.streams` package was manipulating {@link io.vertx.core.buffer.Buffer}
-objects exclusively. From now, streams are not coupled to buffers anymore and they work with any kind of objects.
-
 In Vert.x, write calls return immediately, and writes are queued internally.
 
 It's not hard to see that if you write to an object faster than it can actually write the data to
@@ -125,25 +122,38 @@ Let's now look at the methods on `ReadStream` and `WriteStream` in more detail:
 {@link io.vertx.core.net.NetSocket}, {@link io.vertx.core.http.WebSocket}, {@link io.vertx.core.TimeoutStream},
 {@link io.vertx.core.file.AsyncFile}.
 
-Functions:
-
 - {@link io.vertx.core.streams.ReadStream#handler}:
 set a handler which will receive items from the ReadStream.
 - {@link io.vertx.core.streams.ReadStream#pause}:
-pause the handler. When paused no items will be received in the handler.
+pause the stream. When paused no items will be received in the handler.
+- {@link io.vertx.core.streams.ReadStream#fetch}:
+fetch a specified amount of item fro the stream. The handler will be called if any item arrives. Fetches
+are cumulative.
 - {@link io.vertx.core.streams.ReadStream#resume}:
-resume the handler. The handler will be called if any item arrives.
+resume the stream. The handler will be called if any item arrives. Resuming is equivalent of fetching `Long.MAX_VALUE` items.
 - {@link io.vertx.core.streams.ReadStream#exceptionHandler}:
-Will be called if an exception occurs on the ReadStream.
+called when an exception occurs on the ReadStream.
 - {@link io.vertx.core.streams.ReadStream#endHandler}:
-Will be called when end of stream is reached. This might be when EOF is reached if the ReadStream represents a file,
+called when the end of stream is reached. This might be when EOF is reached if the ReadStream represents a file,
 or when end of request is reached if it's an HTTP request, or when the connection is closed if it's a TCP socket.
+
+A read stream is either in _flowing_ or _fetch_ mode
+
+* initially the stream is in <i>flowing</i> mode
+* when the stream is in _flowing_ mode, elements are delivered to the handler
+* when the stream is in _fetch_ mode, only the number of requested elements will be delivered to the handler
+
+{@link io.vertx.core.streams.ReadStream#pause()}, {@link io.vertx.core.streams.ReadStream#resume()} and {@link io.vertx.core.streams.ReadStream#fetch}
+change the mode
+
+* `resume()` sets the _flowing_ mode
+* `pause()` sets the _fetch_ mode and resets the demand to `0`
+* `fetch(long)` requests a specific amount of elements and adds it to the actual demand
 
 === WriteStream
 
 `WriteStream` is implemented by {@link io.vertx.core.http.HttpClientRequest}, {@link io.vertx.core.http.HttpServerResponse}
-{@link io.vertx.core.http.WebSocket}, {@link io.vertx.core.net.NetSocket}, {@link io.vertx.core.file.AsyncFile},
-and {@link io.vertx.core.eventbus.MessageProducer}
+{@link io.vertx.core.http.WebSocket}, {@link io.vertx.core.net.NetSocket} and {@link io.vertx.core.file.AsyncFile}.
 
 Functions:
 
@@ -161,29 +171,3 @@ returns `true` if the write queue is considered full.
 Will be called if an exception occurs on the `WriteStream`.
 - {@link io.vertx.core.streams.WriteStream#drainHandler}:
 The handler will be called if the `WriteStream` is considered no longer full.
-
-=== Pump
-
-The pump exposes a subset of the pipe API and only transfers the items between streams, it does not handle
-the completion or failure of the transfer operation.
-
-[source,$lang]
-----
-{@link examples.StreamsExamples#pump(io.vertx.core.Vertx)}
-----
-
-IMPORTANT: Before Vert.x 3.7 the {@link io.vertx.core.streams.Pump} was the advocated API for transferring a read stream to
-a write stream. Since 3.7 the pipe API supersedes the pump API.
-
-Instances of Pump have the following methods:
-
-- {@link io.vertx.core.streams.Pump#start}:
-Start the pump.
-- {@link io.vertx.core.streams.Pump#stop}:
-Stops the pump. When the pump starts it is in stopped mode.
-- {@link io.vertx.core.streams.Pump#setWriteQueueMaxSize}:
-This has the same meaning as {@link io.vertx.core.streams.WriteStream#setWriteQueueMaxSize} on the `WriteStream`.
-
-A pump can be started and stopped multiple times.
-
-When a pump is first created it is _not_ started. You need to call the `start()` method to start it.

@@ -11,28 +11,24 @@
 
 package io.vertx.core.eventbus.impl;
 
-import io.vertx.core.Context;
+import io.vertx.core.impl.ContextInternal;
+
+import java.util.Objects;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 public class HandlerHolder<T> {
 
-  public final Context context;
-  public final String address;
+  public final ContextInternal context;
   public final HandlerRegistration<T> handler;
   public final boolean replyHandler;
   public final boolean localOnly;
   private boolean removed;
 
-  public HandlerHolder(HandlerRegistration<T> handler,
-                       String address,
-                       boolean replyHandler,
-                       boolean localOnly,
-                       Context context) {
+  public HandlerHolder(HandlerRegistration<T> handler, boolean replyHandler, boolean localOnly, ContextInternal context) {
     this.context = context;
     this.handler = handler;
-    this.address = address;
     this.replyHandler = replyHandler;
     this.localOnly = localOnly;
   }
@@ -59,17 +55,20 @@ public class HandlerHolder<T> {
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    HandlerHolder that = (HandlerHolder) o;
-    if (handler != null ? !handler.equals(that.handler) : that.handler != null) return false;
-    return true;
+    HandlerHolder<?> that = (HandlerHolder<?>) o;
+    return Objects.equals(handler, that.handler);
   }
 
   @Override
   public int hashCode() {
-    return handler != null ? handler.hashCode() : 0;
+    return Objects.hashCode(handler);
   }
 
-  public Context getContext() {
+  public long getSeq() {
+    return 0;
+  }
+
+  public ContextInternal getContext() {
     return context;
   }
 
@@ -84,5 +83,4 @@ public class HandlerHolder<T> {
   public boolean isLocalOnly() {
     return localOnly;
   }
-;
 }

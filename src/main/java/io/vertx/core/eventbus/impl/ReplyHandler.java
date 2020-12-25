@@ -21,7 +21,7 @@ import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.spi.tracing.TagExtractor;
 import io.vertx.core.spi.tracing.VertxTracer;
 
-class ReplyHandler<T> extends HandlerRegistration<T> implements Handler<Message<T>> {
+class ReplyHandler<T> extends HandlerRegistration<T> {
 
   private final EventBusImpl eventBus;
   private final ContextInternal context;
@@ -45,7 +45,8 @@ class ReplyHandler<T> extends HandlerRegistration<T> implements Handler<Message<
 
   private void trace(Object reply, Throwable failure) {
     VertxTracer tracer = context.tracer();
-    if (tracer != null && src) {
+    Object trace = this.trace;
+    if (tracer != null && src && trace != null) {
       tracer.receiveResponse(context, reply, trace, failure, TagExtractor.empty());
     }
   }
@@ -56,29 +57,34 @@ class ReplyHandler<T> extends HandlerRegistration<T> implements Handler<Message<
 
   void fail(ReplyException failure) {
     unregister(ar -> {});
-    if (eventBus.metrics != null) {
-      eventBus.metrics.replyFailure(repliedAddress, failure.failureType());
+    if (failure.failureType() == ReplyFailure.NO_HANDLERS) {
+      eventBus.vertx.cancelTimer(timeoutID);
     }
-    trace(null, failure);
-    result.tryFail(failure);
+    if (result.tryFail(failure)) {
+      if (eventBus.metrics != null) {
+        eventBus.metrics.replyFailure(repliedAddress, failure.failureType());
+      }
+      trace(null, failure);
+    }
   }
 
 
   @Override
-  protected void doReceive(Message<T> reply) {
-    dispatch(this, reply, context);
-  }
-
-  @Override
-  protected void doUnregister() {
+  protected boolean doReceive(Message<T> reply) {
+    try {
+      dispatch(null, reply, context);
+    } finally {
+      unregister();
+    }
+    return true;
   }
 
   void register() {
-    register(repliedAddress, true, ar -> {});
+    register(repliedAddress, true, null);
   }
 
   @Override
-  public void handle(Message<T> reply) {
+  protected void dispatch(Message<T> reply, ContextInternal context, Handler<Message<T>> handler /* null */) {
     eventBus.vertx.cancelTimer(timeoutID);
     if (reply.body() instanceof ReplyException) {
       // This is kind of clunky - but hey-ho

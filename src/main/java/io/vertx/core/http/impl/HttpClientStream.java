@@ -12,12 +12,12 @@
 package io.vertx.core.http.impl;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.util.concurrent.FutureListener;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
-import io.vertx.core.http.HttpConnection;
-import io.vertx.core.http.HttpMethod;
+import io.vertx.core.Promise;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.HttpFrame;
 import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.StreamPriority;
 import io.vertx.core.impl.ContextInternal;
@@ -41,12 +41,30 @@ public interface HttpClientStream {
    */
   HttpVersion version();
 
-  HttpConnection connection();
+  HttpClientConnection connection();
   ContextInternal getContext();
 
-  void writeHead(HttpMethod method, String rawMethod, String uri, MultiMap headers, String hostHeader, boolean chunked, ByteBuf buf, boolean end, StreamPriority priority, Handler<Void> contHandler, Handler<AsyncResult<Void>> listener);
+  void writeHead(HttpRequestHead request,
+                 boolean chunked,
+                 ByteBuf buf,
+                 boolean end,
+                 StreamPriority priority,
+                 boolean connect,
+                 Handler<AsyncResult<Void>> handler);
   void writeBuffer(ByteBuf buf, boolean end, Handler<AsyncResult<Void>> listener);
   void writeFrame(int type, int flags, ByteBuf payload);
+
+  void continueHandler(Handler<Void> handler);
+  void drainHandler(Handler<Void> handler);
+  void pushHandler(Handler<HttpClientPush> handler);
+  void unknownFrameHandler(Handler<HttpFrame> handler);
+
+  void exceptionHandler(Handler<Throwable> handler);
+
+  void headHandler(Handler<HttpResponseHead> handler);
+  void chunkHandler(Handler<Buffer> handler);
+  void endHandler(Handler<MultiMap> handler);
+  void priorityHandler(Handler<StreamPriority> handler);
 
   void doSetWriteQueueMaxSize(int size);
   boolean isNotWritable();
@@ -54,10 +72,6 @@ public interface HttpClientStream {
   void doFetch(long amount);
 
   void reset(Throwable cause);
-  void beginRequest(HttpClientRequestImpl req);
-  void endRequest();
-
-  NetSocket createNetSocket();
 
   StreamPriority priority();
   void updatePriority(StreamPriority streamPriority);

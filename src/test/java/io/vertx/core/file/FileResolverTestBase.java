@@ -14,19 +14,24 @@ package io.vertx.core.file;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.file.impl.FileResolver;
 import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.file.impl.FileResolver;
+import io.vertx.core.impl.Utils;
 import io.vertx.core.impl.VertxInternal;
+import io.vertx.test.core.TestUtils;
 import io.vertx.test.core.VertxTestBase;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Test;
 
 import java.io.File;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -45,16 +50,26 @@ public abstract class FileResolverTestBase extends VertxTestBase {
 
   protected FileResolver resolver;
 
-  protected String webRoot;
+  private ClassLoader testCL;
 
   @Override
   public void setUp() throws Exception {
     super.setUp();
+    testCL = Thread.currentThread().getContextClassLoader();
+    File baseDir = new File(new File(new File(new File("src"), "test"), "classpath"), "fileresolver");
+    assertTrue(baseDir.exists() && baseDir.isDirectory());
+    ClassLoader resourcesLoader = resourcesLoader(baseDir);
+    Thread.currentThread().setContextClassLoader(resourcesLoader);
     resolver = new FileResolver();
+  }
+
+  protected ClassLoader resourcesLoader(File baseDir) throws Exception {
+    return Thread.currentThread().getContextClassLoader();
   }
 
   @Override
   protected void tearDown() throws Exception {
+    Thread.currentThread().setContextClassLoader(testCL);
     resolver.close();
     super.tearDown();
   }
@@ -96,7 +111,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
     for (int i = 0; i < 2; i++) {
       File file = resolver.resolveFile("afile.html");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertFalse(file.isDirectory());
       assertEquals("<html><body>afile</body></html>", readFile(file));
     }
@@ -109,7 +124,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
       for (int i = 0; i < 2; i++) {
         File file = vertx.resolveFile("afile.html");
         assertTrue(file.exists());
-        assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+        assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
         assertFalse(file.isDirectory());
         assertEquals("<html><body>afile</body></html>", readFile(file));
       }
@@ -123,18 +138,46 @@ public abstract class FileResolverTestBase extends VertxTestBase {
     for (int i = 0; i < 2; i++) {
       File file = resolver.resolveFile("afile with spaces.html");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertFalse(file.isDirectory());
       assertEquals("<html><body>afile with spaces</body></html>", readFile(file));
     }
   }
 
   @Test
+  public void testResolveFileWithSpaceAtEndFromClasspath() {
+    for (int i = 0; i < 2; i++) {
+      File file = resolver.resolveFile("afilewithspaceatend ");
+      if (Utils.isWindows()) {
+        assertFalse(file.exists());
+      } else {
+        assertTrue(file.exists());
+        assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
+        assertFalse(file.isDirectory());
+        assertEquals("afilewithspaceatend ", readFile(file));
+      }
+    }
+  }
+
+  @Test
+  public void testCacheDirIsPosix0700() throws Exception {
+    Assume.assumeFalse(Utils.isWindows());
+
+    File file = resolver.resolveFile("afile with spaces.html");
+    assertTrue(file.exists());
+    assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
+    File parent = file.getParentFile(); // this should be the cache directory
+    assertEquals(
+      "rwx------",
+      PosixFilePermissions.toString(Files.getPosixFilePermissions(parent.toPath())));
+  }
+
+  @Test
   public void testResolveDirectoryFromClasspath() throws Exception {
     for (int i = 0; i < 2; i++) {
-      File file = resolver.resolveFile(webRoot);
+      File file = resolver.resolveFile("webroot");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertTrue(file.isDirectory());
     }
   }
@@ -142,9 +185,9 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testResolveFileInDirectoryFromClasspath() throws Exception {
     for (int i = 0; i < 2; i++) {
-      File file = resolver.resolveFile(webRoot + "/somefile.html");
+      File file = resolver.resolveFile("webroot/somefile.html");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertFalse(file.isDirectory());
       assertEquals("<html><body>blah</body></html>", readFile(file));
     }
@@ -153,9 +196,9 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testResolveSubDirectoryFromClasspath() throws Exception {
     for (int i = 0; i < 2; i++) {
-      File file = resolver.resolveFile(webRoot + "/subdir");
+      File file = resolver.resolveFile("webroot/subdir");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertTrue(file.isDirectory());
     }
   }
@@ -163,9 +206,9 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testResolveFileInSubDirectoryFromClasspath() throws Exception {
     for (int i = 0; i < 2; i++) {
-      File file = resolver.resolveFile(webRoot + "/subdir/subfile.html");
+      File file = resolver.resolveFile("webroot/subdir/subfile.html");
       assertTrue(file.exists());
-      assertTrue(file.getPath().startsWith(cacheBaseDir + File.separator + "file-cache-"));
+      assertTrue(file.getPath().startsWith(cacheBaseDir + "-"));
       assertFalse(file.isDirectory());
       assertEquals("<html><body>subfile</body></html>", readFile(file));
     }
@@ -173,7 +216,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
 
   @Test
   public void testRecursivelyUnpack() throws Exception {
-    File file = resolver.resolveFile(webRoot + "/subdir");
+    File file = resolver.resolveFile("webroot/subdir");
     assertTrue(file.exists());
     File sub = new File(file, "subfile.html");
     assertTrue(sub.exists());
@@ -182,7 +225,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
 
   @Test
   public void testRecursivelyUnpack2() throws Exception {
-    File file = resolver.resolveFile(webRoot + "/subdir");
+    File file = resolver.resolveFile("webroot/subdir");
     assertTrue(file.exists());
     File sub = new File(new File(file, "subdir2"), "subfile2.html");
     assertTrue(sub.exists());
@@ -192,7 +235,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testDeleteCacheDir() throws Exception {
     FileResolver resolver2 = new FileResolver();
-    File file = resolver2.resolveFile(webRoot + "/somefile.html");
+    File file = resolver2.resolveFile("webroot/somefile.html");
     assertTrue(file.exists());
     File cacheDir = file.getParentFile().getParentFile();
     assertTrue(cacheDir.exists());
@@ -203,7 +246,7 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testCacheDirDeletedOnVertxClose() {
     VertxInternal vertx2 = (VertxInternal)vertx();
-    File file = vertx2.resolveFile(webRoot + "/somefile.html");
+    File file = vertx2.resolveFile("webroot/somefile.html");
     assertTrue(file.exists());
     File cacheDir = file.getParentFile().getParentFile();
     assertTrue(cacheDir.exists());
@@ -232,14 +275,17 @@ public abstract class FileResolverTestBase extends VertxTestBase {
   @Test
   public void testSendFileFromClasspath() {
     vertx.createHttpServer(new HttpServerOptions().setPort(8080)).requestHandler(res -> {
-      res.response().sendFile(webRoot + "/somefile.html");
+      res.response().sendFile("webroot/somefile.html");
     }).listen(onSuccess(res -> {
-      vertx.createHttpClient(new HttpClientOptions()).request(HttpMethod.GET, 8080, "localhost", "/", onSuccess(resp -> {
-        resp.bodyHandler(buff -> {
-          assertTrue(buff.toString().startsWith("<html><body>blah</body></html>"));
-          testComplete();
-        });
-      })).end();
+      vertx.createHttpClient(new HttpClientOptions())
+        .request(HttpMethod.GET, 8080, "localhost", "/")
+        .compose(HttpClientRequest::send)
+        .onComplete(onSuccess(resp -> {
+          resp.bodyHandler(buff -> {
+            assertTrue(buff.toString().startsWith("<html><body>blah</body></html>"));
+            testComplete();
+          });
+        }));
     }));
     await();
   }
@@ -327,4 +373,21 @@ public abstract class FileResolverTestBase extends VertxTestBase {
     return vertx.fileSystem().readFileBlocking(file.getAbsolutePath()).toString();
   }
 
+
+  @Test
+  public void testResolveAfterCloseThrowsISE() throws Exception {
+    FileResolver resolver2 = new FileResolver();
+    File file = resolver2.resolveFile("webroot/somefile.html");
+    assertTrue(file.exists());
+    File cacheDir = file.getParentFile().getParentFile();
+    assertTrue(cacheDir.exists());
+    resolver2.close();
+    assertFalse(cacheDir.exists());
+    try {
+      resolver2.resolveFile("webroot/somefile.html");
+      fail("Should fail");
+    } catch (IllegalStateException e) {
+      // OK
+    }
+  }
 }

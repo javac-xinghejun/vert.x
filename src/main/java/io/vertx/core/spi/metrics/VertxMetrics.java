@@ -11,7 +11,6 @@
 
 package io.vertx.core.spi.metrics;
 
-import io.vertx.core.Verticle;
 import io.vertx.core.Vertx;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
@@ -31,28 +30,6 @@ import io.vertx.core.net.*;
  * @author <a href="mailto:nscavell@redhat.com">Nick Scavelli</a>
  */
 public interface VertxMetrics extends Metrics, Measured {
-
-  /**
-   * Called when a verticle is deployed in Vert.x .<p/>
-   * <p>
-   * This method is invoked with {@link io.vertx.core.Context} and thread of the deployed verticle and therefore
-   * might be  different on every invocation.
-   *
-   * @param verticle the verticle which was deployed
-   */
-  default void verticleDeployed(Verticle verticle) {
-  }
-
-  /**
-   * Called when a verticle is undeployed in Vert.x .<p/>
-   * <p>
-   * This method is invoked with {@link io.vertx.core.Context} and thread of the deployed verticle and therefore
-   * might be  different on every invocation, however these are the same than the {@link #verticleDeployed} invocation.
-   *
-   * @param verticle the verticle which was undeployed
-   */
-  default void verticleUndeployed(Verticle verticle) {
-  }
 
   /**
    * Provides the event bus metrics SPI when the event bus is created.<p/>
@@ -86,6 +63,20 @@ public interface VertxMetrics extends Metrics, Measured {
   }
 
   /**
+   * Provides the client metrics SPI when a client has been created.<p/>
+   * <p>
+   * No specific thread and context can be expected when this method is called.
+   *
+   * @param remoteAddress the server remote address
+   * @param type the metrics type, e.g {@code http} or {@code ws}
+   * @param namespace an optional namespace for scoping the metrics
+   * @return the client metrics SPI or {@code null} when metrics are disabled
+   */
+  default ClientMetrics<?, ?, ?, ?> createClientMetrics(SocketAddress remoteAddress, String type, String namespace) {
+    return null;
+  }
+
+  /**
    * Provides the http client metrics SPI when an http client has been created.<p/>
    * <p>
    * No specific thread and context can be expected when this method is called.
@@ -93,7 +84,7 @@ public interface VertxMetrics extends Metrics, Measured {
    * @param options the options used to create the {@link HttpClient}
    * @return the http client metrics SPI or {@code null} when metrics are disabled
    */
-  default HttpClientMetrics<?, ?, ?, ?, ?> createHttpClientMetrics(HttpClientOptions options) {
+  default HttpClientMetrics<?, ?, ?, ?> createHttpClientMetrics(HttpClientOptions options) {
     return null;
   }
 

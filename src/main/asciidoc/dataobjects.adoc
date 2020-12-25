@@ -145,10 +145,6 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[localAddress]]`@localAddress`|`String`|+++
 Set the local interface to bind for network connections. When the local address is null,
  it will pick any local address, the default local address is null.
@@ -159,22 +155,6 @@ Set to true to enabled network activity logging: Netty's pipeline is configured 
 |[[metricsName]]`@metricsName`|`String`|+++
 Set the metrics name identifying the reported metrics, useful for grouping metrics
  with the same name.
-+++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
-+++
-|[[proxyOptions]]`@proxyOptions`|`link:dataobjects.html#ProxyOptions[ProxyOptions]`|+++
-Set proxy options for connections via CONNECT proxy (e.g. Squid) or a SOCKS proxy.
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -222,9 +202,6 @@ Set the value of traffic class
 +++
 |[[trustAll]]`@trustAll`|`Boolean`|+++
 Set whether all server certificates should be trusted
-+++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
 +++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
@@ -357,22 +334,11 @@ Set the send timeout.
 |[[config]]`@config`|`Json object`|+++
 Set the JSON configuration that will be passed to the verticle(s) when it's deployed
 +++
-|[[extraClasspath]]`@extraClasspath`|`Array of String`|+++
-Set any extra classpath to be used when deploying the verticle.
- <p>
- Ignored if no isolation group is set.
-+++
 |[[ha]]`@ha`|`Boolean`|+++
 Set whether the verticle(s) will be deployed as HA.
 +++
 |[[instances]]`@instances`|`Number (int)`|+++
 Set the number of instances that should be deployed.
-+++
-|[[isolatedClasses]]`@isolatedClasses`|`Array of String`|+++
-Set the isolated class names.
-+++
-|[[isolationGroup]]`@isolationGroup`|`String`|+++
-Set the isolation group that will be used when deploying the verticle(s)
 +++
 |[[maxWorkerExecuteTime]]`@maxWorkerExecuteTime`|`Number (long)`|+++
 Sets the value of max worker execute time, in link.
@@ -441,6 +407,14 @@ Set the accept back log.
 |[[clientAuth]]`@clientAuth`|`link:enums.html#ClientAuth[ClientAuth]`|+++
 Set whether client auth is required
 +++
+|[[clusterNodeMetadata]]`@clusterNodeMetadata`|`Json object`|+++
+Set information about this node when Vert.x is clustered.
+ <p>
+ The data may be used by the link to select a node for a given message.
+ For example, it could be used to implement a partioning strategy.
+ <p>
+ The default link does not use the node metadata.
++++
 |[[clusterPingInterval]]`@clusterPingInterval`|`Number (long)`|+++
 Set the value of cluster ping interval, in ms.
 +++
@@ -459,9 +433,6 @@ Set the public facing hostname to be used for clustering.
 |[[clusterPublicPort]]`@clusterPublicPort`|`Number (int)`|+++
 See link for an explanation.
 +++
-|[[clustered]]`@clustered`|`Boolean`|+++
-Sets whether or not the event bus is clustered.
-+++
 |[[connectTimeout]]`@connectTimeout`|`Number (int)`|+++
 Sets the connect timeout
 +++
@@ -478,7 +449,11 @@ Add an enabled cipher suite, appended to the ordered suites.
 Sets the list of enabled SSL/TLS protocols.
 +++
 |[[host]]`@host`|`String`|+++
-Sets the host.
+Sets the host. Defaults to <code>null</code>.
+ <p>
+ When the clustered eventbus starts, it tries to bind to the provided <code>host</code>.
+ If <code>host</code> is <code>null</code>, then it tries to bind to the same host as the underlying cluster manager.
+ As a last resort, an address will be picked among the available network interfaces.
 +++
 |[[idleTimeout]]`@idleTimeout`|`Number (int)`|+++
 Set the idle timeout, default time unit is seconds. Zero means don't timeout.
@@ -489,25 +464,8 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[logActivity]]`@logActivity`|`Boolean`|+++
 Set to true to enabled network activity logging: Netty's pipeline is configured for logging on Netty's logger.
-+++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
 +++
 |[[port]]`@port`|`Number (int)`|+++
 Sets the port.
@@ -564,9 +522,6 @@ Set the value of traffic class
 +++
 |[[trustAll]]`@trustAll`|`Boolean`|+++
 Set whether all server certificates should be trusted.
-+++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
 +++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
@@ -723,6 +678,8 @@ Set the default HTTP/2 connection window size. It overrides the initial window
 Set the keep alive timeout for HTTP/2 connections, in seconds.
  <p/>
  This value determines how long a connection remains unused in the pool before being evicted and closed.
+ <p/>
+ A timeout of <code>0</code> means there is no timeout.
 +++
 |[[http2MaxPoolSize]]`@http2MaxPoolSize`|`Number (int)`|+++
 Set the maximum pool size for HTTP/2 connections
@@ -744,10 +701,6 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[initialSettings]]`@initialSettings`|`link:dataobjects.html#Http2Settings[Http2Settings]`|+++
-Set the HTTP/2 connection settings immediately sent by to the server when the client connects.
-+++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
 |[[keepAlive]]`@keepAlive`|`Boolean`|+++
 Set whether keep alive is enabled on the client
 +++
@@ -755,9 +708,8 @@ Set whether keep alive is enabled on the client
 Set the keep alive timeout for HTTP/1.x, in seconds.
  <p/>
  This value determines how long a connection remains unused in the pool before being evicted and closed.
-+++
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
+ <p/>
+ A timeout of <code>0</code> means there is no timeout.
 +++
 |[[localAddress]]`@localAddress`|`String`|+++
 Set the local interface to bind for network connections. When the local address is null,
@@ -785,28 +737,18 @@ Set to <code>maxRedirects</code> the maximum number of redirection a request can
 Set the maximum requests allowed in the wait queue, any requests beyond the max size will result in
  a ConnectionPoolTooBusyException.  If the value is set to a negative number then the queue will be unbounded.
 +++
-|[[maxWebsocketFrameSize]]`@maxWebsocketFrameSize`|`Number (int)`|+++
+|[[maxWebSocketFrameSize]]`@maxWebSocketFrameSize`|`Number (int)`|+++
 Set the max WebSocket frame size
 +++
-|[[maxWebsocketMessageSize]]`@maxWebsocketMessageSize`|`Number (int)`|+++
+|[[maxWebSocketMessageSize]]`@maxWebSocketMessageSize`|`Number (int)`|+++
 Set the max WebSocket message size
++++
+|[[maxWebSockets]]`@maxWebSockets`|`Number (int)`|+++
+Set the max number of WebSockets per endpoint.
 +++
 |[[metricsName]]`@metricsName`|`String`|+++
 Set the metrics name identifying the reported metrics, useful for grouping metrics
  with the same name.
-+++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
 +++
 |[[pipelining]]`@pipelining`|`Boolean`|+++
 Set whether pipe-lining is enabled on the client
@@ -820,9 +762,6 @@ Set the connection pool cleaner period in milli seconds, a non positive value di
 +++
 |[[protocolVersion]]`@protocolVersion`|`link:enums.html#HttpVersion[HttpVersion]`|+++
 Set the protocol version.
-+++
-|[[proxyOptions]]`@proxyOptions`|`link:dataobjects.html#ProxyOptions[ProxyOptions]`|+++
-Set proxy options for connections via CONNECT proxy (e.g. Squid) or a SOCKS proxy.
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -873,25 +812,25 @@ Set whether TCP no delay is enabled
 |[[tcpQuickAck]]`@tcpQuickAck`|`Boolean`|+++
 Enable the <code>TCP_QUICKACK</code> option - only with linux native transport.
 +++
+|[[tracingPolicy]]`@tracingPolicy`|`link:enums.html#TracingPolicy[TracingPolicy]`|+++
+Set the tracing policy for the client behavior when Vert.x has tracing enabled.
++++
 |[[trafficClass]]`@trafficClass`|`Number (int)`|+++
 Set the value of traffic class
 +++
 |[[trustAll]]`@trustAll`|`Boolean`|+++
 Set whether all server certificates should be trusted
 +++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
-+++
 |[[tryUseCompression]]`@tryUseCompression`|`Boolean`|+++
 Set whether compression is enabled
 +++
-|[[tryUsePerFrameWebsocketCompression]]`@tryUsePerFrameWebsocketCompression`|`Boolean`|+++
+|[[tryUsePerFrameWebSocketCompression]]`@tryUsePerFrameWebSocketCompression`|`Boolean`|+++
 Set whether the client will offer the WebSocket per-frame deflate compression extension.
 +++
-|[[tryUsePerMessageWebsocketCompression]]`@tryUsePerMessageWebsocketCompression`|`Boolean`|+++
+|[[tryUsePerMessageWebSocketCompression]]`@tryUsePerMessageWebSocketCompression`|`Boolean`|+++
 Set whether the client will offer the WebSocket per-message deflate compression extension.
 +++
-|[[tryWebsocketDeflateFrameCompression]]`@tryWebsocketDeflateFrameCompression`|`Boolean`|+++
+|[[tryWebSocketDeflateFrameCompression]]`@tryWebSocketDeflateFrameCompression`|`Boolean`|+++
 
 +++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
@@ -900,17 +839,39 @@ Set the ALPN usage.
 |[[verifyHost]]`@verifyHost`|`Boolean`|+++
 Set whether hostname verification is enabled
 +++
-|[[websocketCompressionAllowClientNoContext]]`@websocketCompressionAllowClientNoContext`|`Boolean`|+++
+|[[webSocketClosingTimeout]]`@webSocketClosingTimeout`|`Number (int)`|+++
+Set the amount of time a client WebSocket will wait until it closes the TCP connection after receiving a close frame.
+
+ <p> When a WebSocket is closed, the server should close the TCP connection. This timeout will close
+ the TCP connection on the client when it expires.
+
+ <p> Set <code>0L</code> or a negative value to disable.
++++
+|[[webSocketCompressionAllowClientNoContext]]`@webSocketCompressionAllowClientNoContext`|`Boolean`|+++
 Set whether the <code>client_no_context_takeover</code> parameter of the WebSocket per-message
  deflate compression extension will be offered.
 +++
-|[[websocketCompressionLevel]]`@websocketCompressionLevel`|`Number (int)`|+++
-Set the Websocket deflate compression level.
+|[[webSocketCompressionLevel]]`@webSocketCompressionLevel`|`Number (int)`|+++
+Set the WebSocket deflate compression level.
 +++
-|[[websocketCompressionRequestServerNoContext]]`@websocketCompressionRequestServerNoContext`|`Boolean`|+++
+|[[webSocketCompressionRequestServerNoContext]]`@webSocketCompressionRequestServerNoContext`|`Boolean`|+++
 Set whether the <code>server_no_context_takeover</code> parameter of the WebSocket per-message
  deflate compression extension will be offered.
 +++
+|===
+
+[[HttpMethod]]
+== HttpMethod
+
+++++
+ Represents an HTTP method.
+++++
+'''
+
+[cols=">25%,25%,50%"]
+[frame="topbot"]
+|===
+^|Name | Type ^| Description
 |===
 
 [[HttpServerOptions]]
@@ -1006,13 +967,6 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[initialSettings]]`@initialSettings`|`link:dataobjects.html#Http2Settings[Http2Settings]`|+++
-Set the HTTP/2 connection settings immediatly sent by the server when a client connects.
-+++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[logActivity]]`@logActivity`|`Boolean`|+++
 Set to true to enabled network activity logging: Netty's pipeline is configured for logging on Netty's logger.
 +++
@@ -1025,33 +979,26 @@ Set the maximum length of all headers for HTTP/1.x .
 |[[maxInitialLineLength]]`@maxInitialLineLength`|`Number (int)`|+++
 Set the maximum length of the initial line for HTTP/1.x (e.g. <code>"GET / HTTP/1.0"</code>)
 +++
-|[[maxWebsocketFrameSize]]`@maxWebsocketFrameSize`|`Number (int)`|+++
+|[[maxWebSocketFrameSize]]`@maxWebSocketFrameSize`|`Number (int)`|+++
 Set the maximum WebSocket frames size
 +++
-|[[maxWebsocketMessageSize]]`@maxWebsocketMessageSize`|`Number (int)`|+++
+|[[maxWebSocketMessageSize]]`@maxWebSocketMessageSize`|`Number (int)`|+++
 Set the maximum WebSocket message size
 +++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[perFrameWebsocketCompressionSupported]]`@perFrameWebsocketCompressionSupported`|`Boolean`|+++
+|[[perFrameWebSocketCompressionSupported]]`@perFrameWebSocketCompressionSupported`|`Boolean`|+++
 Enable or disable support for the WebSocket per-frame deflate compression extension.
 +++
-|[[perMessageWebsocketCompressionSupported]]`@perMessageWebsocketCompressionSupported`|`Boolean`|+++
+|[[perMessageWebSocketCompressionSupported]]`@perMessageWebSocketCompressionSupported`|`Boolean`|+++
 Enable or disable support for WebSocket per-message deflate compression extension.
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
 +++
 |[[port]]`@port`|`Number (int)`|+++
 Set the port
++++
+|[[proxyProtocolTimeout]]`@proxyProtocolTimeout`|`Number (long)`|+++
+Set the Proxy protocol timeout, default time unit is seconds.
++++
+|[[proxyProtocolTimeoutUnit]]`@proxyProtocolTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
+Set the Proxy protocol timeout unit. If not specified, default is seconds.
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -1097,28 +1044,31 @@ Set whether TCP no delay is enabled
 |[[tcpQuickAck]]`@tcpQuickAck`|`Boolean`|+++
 Enable the <code>TCP_QUICKACK</code> option - only with linux native transport.
 +++
+|[[tracingPolicy]]`@tracingPolicy`|`link:enums.html#TracingPolicy[TracingPolicy]`|+++
+Set the tracing policy for the server behavior when Vert.x has tracing enabled.
++++
 |[[trafficClass]]`@trafficClass`|`Number (int)`|+++
 Set the value of traffic class
-+++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
 +++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
 +++
-|[[websocketAllowServerNoContext]]`@websocketAllowServerNoContext`|`Boolean`|+++
+|[[useProxyProtocol]]`@useProxyProtocol`|`Boolean`|+++
+Set whether the server uses the HA Proxy protocol
++++
+|[[webSocketAllowServerNoContext]]`@webSocketAllowServerNoContext`|`Boolean`|+++
 Set whether the WebSocket server will accept the <code>server_no_context_takeover</code> parameter of the per-message
  deflate compression extension offered by the client.
 +++
-|[[websocketCompressionLevel]]`@websocketCompressionLevel`|`Number (int)`|+++
+|[[webSocketCompressionLevel]]`@webSocketCompressionLevel`|`Number (int)`|+++
 Set the WebSocket compression level.
 +++
-|[[websocketPreferredClientNoContext]]`@websocketPreferredClientNoContext`|`Boolean`|+++
+|[[webSocketPreferredClientNoContext]]`@webSocketPreferredClientNoContext`|`Boolean`|+++
 Set whether the WebSocket server will accept the <code>client_no_context_takeover</code> parameter of the per-message
  deflate compression extension offered by the client.
 +++
-|[[websocketSubProtocols]]`@websocketSubProtocols`|`String`|+++
-Set the WebSocket sub-protocols supported by the server.
+|[[webSocketSubProtocols]]`@webSocketSubProtocols`|`Array of String`|+++
+Set the WebSocket list of sub-protocol supported by the server.
 +++
 |===
 
@@ -1141,23 +1091,55 @@ Set the WebSocket sub-protocols supported by the server.
 
 ++++
  Key or trust store options configuring private key and/or certificates based on Java Keystore files.
- <p>
- When used as a key store, it should point to a store containing a private key and its certificate.
- When used as a trust store, it should point to a store containing a list of trusted certificates.
- <p>
- The store can either be loaded by Vert.x from the filesystem:
- <p>
+++++
+'''
+
+[cols=">25%,25%,50%"]
+[frame="topbot"]
+|===
+^|Name | Type ^| Description
+|[[password]]`@password`|`String`|+++
+Set the password for the key store
++++
+|[[path]]`@path`|`String`|+++
+Set the path to the key store
++++
+|[[value]]`@value`|`Buffer`|+++
+Set the key store as a buffer
++++
+|===
+
+[[KeyStoreOptions]]
+== KeyStoreOptions
+
+++++
+ Key or trust store options configuring private key and/or certificates based on <code>KeyStore</code>.
+
+ <ul>
+   <li>when used as a key store, it should point to a store containing a private key and its certificate.</li>
+   <li>when used as a trust store, it should point to a store containing a list of trusted certificates.</li>
+ </ul>
+
+ <p> The store can either be loaded by Vert.x from the filesystem:
+
  <pre>
  HttpServerOptions options = HttpServerOptions.httpServerOptions();
- options.setKeyStore(new JKSOptions().setPath("/mykeystore.jks").setPassword("foo"));
+ options.setKeyCertOptions(new KeyStoreOptions().setType("JKS").setPath("/mykeystore.jks").setPassword("foo"));
  </pre>
 
  Or directly provided as a buffer:
- <p>
 
  <pre>
- Buffer store = vertx.fileSystem().readFileSync("/mykeystore.jks");
- options.setKeyStore(new JKSOptions().setValue(store).setPassword("foo"));
+ Buffer store = vertx.fileSystem().readFileBlocking("/mykeystore.jks");
+ options.setKeyCertOptions(new KeyStoreOptions().setType("JKS").setValue(store).setPassword("foo"));
+ </pre>
+
+ <p> You can also use specific subclasses link or link that will set
+ the link for you:
+
+ <pre>
+ HttpServerOptions options = HttpServerOptions.httpServerOptions();
+ options.setKeyCertOptions(new JksOptions().setPath("/mykeystore.jks").setPassword("foo"));
  </pre>
 ++++
 '''
@@ -1171,6 +1153,12 @@ Set the password for the key store
 +++
 |[[path]]`@path`|`String`|+++
 Set the path to the key store
++++
+|[[provider]]`@provider`|`String`|+++
+Set the store provider.
++++
+|[[type]]`@type`|`String`|+++
+Set the store type.
 +++
 |[[value]]`@value`|`Buffer`|+++
 Set the key store as a buffer
@@ -1235,10 +1223,6 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[localAddress]]`@localAddress`|`String`|+++
 Set the local interface to bind for network connections. When the local address is null,
  it will pick any local address, the default local address is null.
@@ -1249,22 +1233,6 @@ Set to true to enabled network activity logging: Netty's pipeline is configured 
 |[[metricsName]]`@metricsName`|`String`|+++
 Set the metrics name identifying the reported metrics, useful for grouping metrics
  with the same name.
-+++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
-+++
-|[[proxyOptions]]`@proxyOptions`|`link:dataobjects.html#ProxyOptions[ProxyOptions]`|+++
-Set proxy options for connections via CONNECT proxy (e.g. Squid) or a SOCKS proxy.
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -1319,9 +1287,6 @@ Set the value of traffic class
 |[[trustAll]]`@trustAll`|`Boolean`|+++
 Set whether all server certificates should be trusted
 +++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
-+++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
 +++
@@ -1369,28 +1334,17 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[logActivity]]`@logActivity`|`Boolean`|+++
 Set to true to enabled network activity logging: Netty's pipeline is configured for logging on Netty's logger.
 +++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
-+++
 |[[port]]`@port`|`Number (int)`|+++
 Set the port
++++
+|[[proxyProtocolTimeout]]`@proxyProtocolTimeout`|`Number (long)`|+++
+Set the Proxy protocol timeout, default time unit is seconds.
++++
+|[[proxyProtocolTimeoutUnit]]`@proxyProtocolTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
+Set the Proxy protocol timeout unit. If not specified, default is seconds.
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -1439,11 +1393,11 @@ Enable the <code>TCP_QUICKACK</code> option - only with linux native transport.
 |[[trafficClass]]`@trafficClass`|`Number (int)`|+++
 Set the value of traffic class
 +++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
-+++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
++++
+|[[useProxyProtocol]]`@useProxyProtocol`|`Boolean`|+++
+Set whether the server uses the HA Proxy protocol
 +++
 |===
 
@@ -1658,8 +1612,8 @@ Sets whether or not this option can receive a value.
  Or directly provided as a buffer:<p>
 
  <pre>
- Buffer key = vertx.fileSystem().readFileSync("/mykey.pem");
- Buffer cert = vertx.fileSystem().readFileSync("/mycert.pem");
+ Buffer key = vertx.fileSystem().readFileBlocking("/mykey.pem");
+ Buffer cert = vertx.fileSystem().readFileBlocking("/mycert.pem");
  options.setPemKeyCertOptions(new PemKeyCertOptions().setKeyValue(key).setCertValue(cert));
  </pre>
 
@@ -1733,7 +1687,7 @@ Set all the keys as a list of buffer
  <p>
 
  <pre>
- Buffer cert = vertx.fileSystem().readFileSync("/cert.pem");
+ Buffer cert = vertx.fileSystem().readFileBlocking("/cert.pem");
  HttpServerOptions options = new HttpServerOptions();
  options.setPemTrustOptions(new PemTrustOptions().addCertValue(cert));
  </pre>
@@ -1757,24 +1711,6 @@ Add a certificate value
 
 ++++
  Key or trust store options configuring private key and/or certificates based on PKCS#12 files.
- <p>
- When used as a key store, it should point to a store containing a private key and its certificate.
- When used as a trust store, it should point to a store containing a list of accepted certificates.
- <p>
-
- The store can either be loaded by Vert.x from the filesystem:
- <p>
- <pre>
- HttpServerOptions options = new HttpServerOptions();
- options.setPfxKeyCertOptions(new PfxOptions().setPath("/mykeystore.p12").setPassword("foo"));
- </pre>
-
- Or directly provided as a buffer:<p>
-
- <pre>
- Buffer store = vertx.fileSystem().readFileSync("/mykeystore.p12");
- options.setPfxKeyCertOptions(new PfxOptions().setValue(store).setPassword("foo"));
- </pre>
 ++++
 '''
 
@@ -1783,13 +1719,13 @@ Add a certificate value
 |===
 ^|Name | Type ^| Description
 |[[password]]`@password`|`String`|+++
-Set the password
+Set the password for the key store
 +++
 |[[path]]`@path`|`String`|+++
-Set the path
+Set the path to the key store
 +++
 |[[value]]`@value`|`Buffer`|+++
-Set the store as a buffer
+Set the key store as a buffer
 +++
 |===
 
@@ -1828,7 +1764,7 @@ Set proxy username.
 == RequestOptions
 
 ++++
- Options describing how an link will make connect to make a request.
+ Options describing how an link will connect to make a request.
 ++++
 '''
 
@@ -1836,20 +1772,32 @@ Set proxy username.
 [frame="topbot"]
 |===
 ^|Name | Type ^| Description
+|[[absoluteURI]]`@absoluteURI`|`String`|+++
+Parse an absolute URI to use, this will update the <code>ssl</code>, <code>host</code>,
+ <code>port</code> and <code>uri</code> fields.
++++
+|[[followRedirects]]`@followRedirects`|`Boolean`|+++
+Set whether to follow HTTP redirect
++++
 |[[headers]]`@headers`|`String`|+++
 Add a request header.
 +++
 |[[host]]`@host`|`String`|+++
 Set the host name to be used by the client request.
 +++
-|[[port]]`@port`|`Number (int)`|+++
+|[[port]]`@port`|`Number (Integer)`|+++
 Set the port to be used by the client request.
 +++
 |[[ssl]]`@ssl`|`Boolean`|+++
-Set whether SSL/TLS is enabled
+Set whether SSL/TLS is enabled.
++++
+|[[timeout]]`@timeout`|`Number (long)`|+++
+Sets the amount of time after which if the request does not return any data within the timeout period an
+ link will be passed to the exception handler and
+ the request will be closed.
 +++
 |[[uri]]`@uri`|`String`|+++
-Set the request relative URI
+Set the request relative URI.
 +++
 |===
 
@@ -1909,25 +1857,8 @@ Set the idle timeout, default time unit is seconds. Zero means don't timeout.
 |[[idleTimeoutUnit]]`@idleTimeoutUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the idle timeout unit. If not specified, default is seconds.
 +++
-|[[jdkSslEngineOptions]]`@jdkSslEngineOptions`|`link:dataobjects.html#JdkSSLEngineOptions[JdkSSLEngineOptions]`|-
-|[[keyStoreOptions]]`@keyStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the key/cert options in jks format, aka Java keystore.
-+++
 |[[logActivity]]`@logActivity`|`Boolean`|+++
 Set to true to enabled network activity logging: Netty's pipeline is configured for logging on Netty's logger.
-+++
-|[[openSslEngineOptions]]`@openSslEngineOptions`|`link:dataobjects.html#OpenSSLEngineOptions[OpenSSLEngineOptions]`|-
-|[[pemKeyCertOptions]]`@pemKeyCertOptions`|`link:dataobjects.html#PemKeyCertOptions[PemKeyCertOptions]`|+++
-Set the key/cert store options in pem format.
-+++
-|[[pemTrustOptions]]`@pemTrustOptions`|`link:dataobjects.html#PemTrustOptions[PemTrustOptions]`|+++
-Set the trust options in pem format
-+++
-|[[pfxKeyCertOptions]]`@pfxKeyCertOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the key/cert options in pfx format.
-+++
-|[[pfxTrustOptions]]`@pfxTrustOptions`|`link:dataobjects.html#PfxOptions[PfxOptions]`|+++
-Set the trust options in pfx format
 +++
 |[[receiveBufferSize]]`@receiveBufferSize`|`Number (int)`|+++
 Set the TCP receive buffer size
@@ -1973,9 +1904,6 @@ Enable the <code>TCP_QUICKACK</code> option - only with linux native transport.
 |[[trafficClass]]`@trafficClass`|`Number (int)`|+++
 Set the value of traffic class
 +++
-|[[trustStoreOptions]]`@trustStoreOptions`|`link:dataobjects.html#JksOptions[JksOptions]`|+++
-Set the trust options in jks format, aka Java truststore
-+++
 |[[useAlpn]]`@useAlpn`|`Boolean`|+++
 Set the ALPN usage.
 +++
@@ -1994,9 +1922,6 @@ Set the ALPN usage.
 [frame="topbot"]
 |===
 ^|Name | Type ^| Description
-|[[enabled]]`@enabled`|`Boolean`|+++
-Set whether tracing will be enabled on the Vert.x instance.
-+++
 |===
 
 [[VertxOptions]]
@@ -2011,9 +1936,6 @@ Set whether tracing will be enabled on the Vert.x instance.
 [frame="topbot"]
 |===
 ^|Name | Type ^| Description
-|[[addressResolverOptions]]`@addressResolverOptions`|`link:dataobjects.html#AddressResolverOptions[AddressResolverOptions]`|+++
-Sets the address resolver configuration to configure resolving DNS servers, cache TTL, etc...
-+++
 |[[blockedThreadCheckInterval]]`@blockedThreadCheckInterval`|`Number (long)`|+++
 Sets the value of blocked thread check period, in link.
  <p>
@@ -2022,39 +1944,8 @@ Sets the value of blocked thread check period, in link.
 |[[blockedThreadCheckIntervalUnit]]`@blockedThreadCheckIntervalUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the time unit of <code>blockedThreadCheckInterval</code>.
 +++
-|[[clusterHost]]`@clusterHost`|`String`|+++
-Set the hostname to be used for clustering.
-+++
-|[[clusterPingInterval]]`@clusterPingInterval`|`Number (long)`|+++
-Set the value of cluster ping interval, in ms.
-+++
-|[[clusterPingReplyInterval]]`@clusterPingReplyInterval`|`Number (long)`|+++
-Set the value of cluster ping reply interval, in ms.
-+++
-|[[clusterPort]]`@clusterPort`|`Number (int)`|+++
-Set the port to be used for clustering.
-+++
-|[[clusterPublicHost]]`@clusterPublicHost`|`String`|+++
-Set the public facing hostname to be used for clustering.
- Sometimes, e.g. when running on certain clouds, the local address the server listens on for clustering is not the same
- address that other nodes connect to it at, as the OS / cloud infrastructure does some kind of proxying.
- If this is the case you can specify a public hostname which is different from the hostname the server listens at.
- The default value is null which means use the same as the cluster hostname.
-+++
-|[[clusterPublicPort]]`@clusterPublicPort`|`Number (int)`|+++
-See link for an explanation.
-+++
-|[[clustered]]`@clustered`|`Boolean`|+++
-Set whether or not the Vert.x instance will be clustered.
-+++
-|[[eventBusOptions]]`@eventBusOptions`|`link:dataobjects.html#EventBusOptions[EventBusOptions]`|+++
-Sets the event bus configuration to configure the host, port, ssl...
-+++
 |[[eventLoopPoolSize]]`@eventLoopPoolSize`|`Number (int)`|+++
 Set the number of event loop threads to be used by the Vert.x instance.
-+++
-|[[fileSystemOptions]]`@fileSystemOptions`|`link:dataobjects.html#FileSystemOptions[FileSystemOptions]`|+++
-Set the file system options
 +++
 |[[haEnabled]]`@haEnabled`|`Boolean`|+++
 Set whether HA will be enabled on the Vert.x instance.
@@ -2081,16 +1972,12 @@ Sets the value of max worker execute time, in link.
 |[[maxWorkerExecuteTimeUnit]]`@maxWorkerExecuteTimeUnit`|`link:enums.html#TimeUnit[TimeUnit]`|+++
 Set the time unit of <code>maxWorkerExecuteTime</code>.
 +++
-|[[metricsOptions]]`@metricsOptions`|`link:dataobjects.html#MetricsOptions[MetricsOptions]`|+++
-Set the metrics options
-+++
 |[[preferNativeTransport]]`@preferNativeTransport`|`Boolean`|+++
 Set wether to prefer the native transport to the JDK transport.
 +++
 |[[quorumSize]]`@quorumSize`|`Number (int)`|+++
 Set the quorum size to be used when HA is enabled.
 +++
-|[[tracingOptions]]`@tracingOptions`|`link:dataobjects.html#TracingOptions[TracingOptions]`|-
 |[[warningExceptionTime]]`@warningExceptionTime`|`Number (long)`|+++
 Set the threshold value above this, the blocked warning contains a stack trace. in link.
  The default value of link is
@@ -2115,23 +2002,35 @@ Set the maximum number of worker threads to be used by the Vert.x instance.
 [frame="topbot"]
 |===
 ^|Name | Type ^| Description
+|[[absoluteURI]]`@absoluteURI`|`String`|+++
+Parse an absolute URI to use, this will update the <code>ssl</code>, <code>host</code>,
+ <code>port</code> and <code>uri</code> fields.
++++
+|[[followRedirects]]`@followRedirects`|`Boolean`|+++
+Set whether to follow HTTP redirect
++++
 |[[headers]]`@headers`|`String`|+++
 Add a request header.
 +++
 |[[host]]`@host`|`String`|+++
 Set the host name to be used by the client request.
 +++
-|[[port]]`@port`|`Number (int)`|+++
+|[[port]]`@port`|`Number (Integer)`|+++
 Set the port to be used by the client request.
 +++
 |[[ssl]]`@ssl`|`Boolean`|+++
-Set whether SSL/TLS is enabled
+Set whether SSL/TLS is enabled.
 +++
 |[[subProtocols]]`@subProtocols`|`Array of String`|+++
 Set the WebSocket sub protocols to use.
 +++
+|[[timeout]]`@timeout`|`Number (long)`|+++
+Sets the amount of time after which if the request does not return any data within the timeout period an
+ link will be passed to the exception handler and
+ the request will be closed.
++++
 |[[uri]]`@uri`|`String`|+++
-Set the request relative URI
+Set the request relative URI.
 +++
 |[[version]]`@version`|`link:enums.html#WebsocketVersion[WebsocketVersion]`|+++
 Set the WebSocket version.

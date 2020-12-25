@@ -2,6 +2,7 @@ package io.vertx.core.net;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.impl.JsonUtil;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
@@ -27,7 +28,7 @@ public class TCPSSLOptionsConverter {
           if (member.getValue() instanceof JsonArray) {
             ((Iterable<Object>)member.getValue()).forEach( item -> {
               if (item instanceof String)
-                obj.addCrlValue(io.vertx.core.buffer.Buffer.buffer(java.util.Base64.getDecoder().decode((String)item)));
+                obj.addCrlValue(io.vertx.core.buffer.Buffer.buffer(JsonUtil.BASE64_DECODER.decode((String)item)));
             });
           }
           break;
@@ -61,37 +62,37 @@ public class TCPSSLOptionsConverter {
           break;
         case "jdkSslEngineOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setJdkSslEngineOptions(new io.vertx.core.net.JdkSSLEngineOptions((JsonObject)member.getValue()));
+            obj.setJdkSslEngineOptions(new io.vertx.core.net.JdkSSLEngineOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "keyStoreOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setKeyStoreOptions(new io.vertx.core.net.JksOptions((JsonObject)member.getValue()));
+            obj.setKeyStoreOptions(new io.vertx.core.net.JksOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "openSslEngineOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setOpenSslEngineOptions(new io.vertx.core.net.OpenSSLEngineOptions((JsonObject)member.getValue()));
+            obj.setOpenSslEngineOptions(new io.vertx.core.net.OpenSSLEngineOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "pemKeyCertOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setPemKeyCertOptions(new io.vertx.core.net.PemKeyCertOptions((JsonObject)member.getValue()));
+            obj.setPemKeyCertOptions(new io.vertx.core.net.PemKeyCertOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "pemTrustOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setPemTrustOptions(new io.vertx.core.net.PemTrustOptions((JsonObject)member.getValue()));
+            obj.setPemTrustOptions(new io.vertx.core.net.PemTrustOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "pfxKeyCertOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setPfxKeyCertOptions(new io.vertx.core.net.PfxOptions((JsonObject)member.getValue()));
+            obj.setPfxKeyCertOptions(new io.vertx.core.net.PfxOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "pfxTrustOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setPfxTrustOptions(new io.vertx.core.net.PfxOptions((JsonObject)member.getValue()));
+            obj.setPfxTrustOptions(new io.vertx.core.net.PfxOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "soLinger":
@@ -141,7 +142,7 @@ public class TCPSSLOptionsConverter {
           break;
         case "trustStoreOptions":
           if (member.getValue() instanceof JsonObject) {
-            obj.setTrustStoreOptions(new io.vertx.core.net.JksOptions((JsonObject)member.getValue()));
+            obj.setTrustStoreOptions(new io.vertx.core.net.JksOptions((io.vertx.core.json.JsonObject)member.getValue()));
           }
           break;
         case "useAlpn":
@@ -165,7 +166,7 @@ public class TCPSSLOptionsConverter {
     }
     if (obj.getCrlValues() != null) {
       JsonArray array = new JsonArray();
-      obj.getCrlValues().forEach(item -> array.add(java.util.Base64.getEncoder().encodeToString(item.getBytes())));
+      obj.getCrlValues().forEach(item -> array.add(JsonUtil.BASE64_ENCODER.encodeToString(item.getBytes())));
       json.put("crlValues", array);
     }
     if (obj.getEnabledCipherSuites() != null) {

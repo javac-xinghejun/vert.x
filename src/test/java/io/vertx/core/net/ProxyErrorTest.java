@@ -14,6 +14,9 @@ package io.vertx.core.net;
 import java.net.InetSocketAddress;
 
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
+import io.vertx.core.http.HttpClientRequest;
+import io.vertx.core.http.RequestOptions;
 import io.vertx.test.proxy.HttpProxy;
 import io.vertx.test.core.VertxTestBase;
 import org.junit.Test;
@@ -130,7 +133,14 @@ public class ProxyErrorTest extends VertxTestBase {
             .setPort(proxy.getPort()));
     HttpClient client = vertx.createHttpClient(options);
 
-    client.getAbs(url, assertResponse).end();
+    client.request(new RequestOptions().setAbsoluteURI(url), ar -> {
+      if (ar.succeeded()) {
+        HttpClientRequest request = ar.result();
+        request.send(assertResponse);
+      } else {
+        assertResponse.handle(Future.failedFuture(ar.cause()));
+      }
+    });
 
     await();
   }

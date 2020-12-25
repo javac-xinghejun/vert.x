@@ -13,6 +13,7 @@ package io.vertx.core.impl.launcher.commands;
 
 import io.vertx.core.*;
 import io.vertx.core.cli.annotations.*;
+import io.vertx.core.eventbus.AddressHelper;
 import io.vertx.core.eventbus.EventBusOptions;
 import io.vertx.core.impl.launcher.VertxLifecycleHooks;
 import io.vertx.core.impl.logging.Logger;
@@ -25,10 +26,6 @@ import io.vertx.core.spi.launcher.ExecutionContext;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.lang.reflect.Method;
-import java.net.Inet6Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.SocketException;
 import java.util.Enumeration;
 import java.util.Objects;
 import java.util.Properties;
@@ -49,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class BareCommand extends ClasspathHandler {
 
   public static final String VERTX_OPTIONS_PROP_PREFIX = "vertx.options.";
+  public static final String VERTX_EVENTBUS_PROP_PREFIX = "vertx.eventBus.options.";
   public static final String DEPLOYMENT_OPTIONS_PROP_PREFIX = "vertx.deployment.options.";
   public static final String METRICS_OPTIONS_PROP_PREFIX = "vertx.metrics.options.";
 
@@ -200,20 +198,26 @@ public class BareCommand extends ClasspathHandler {
   @SuppressWarnings("ThrowableResultOfMethodCallIgnored")
   protected Vertx startVertx() {
     JsonObject optionsJson = getJsonFromFileOrString(vertxOptions, "options");
+
+    EventBusOptions eventBusOptions;
+    MetricsOptions metricsOptions;
     if (optionsJson == null) {
-      MetricsOptions metricsOptions = getMetricsOptions();
-      options = new VertxOptions().setMetricsOptions(metricsOptions);
+      eventBusOptions = getEventBusOptions();
+      metricsOptions = getMetricsOptions();
+      options = new VertxOptions();
     } else {
-      MetricsOptions metricsOptions = getMetricsOptions(optionsJson.getJsonObject("metricsOptions"));
-      options = new VertxOptions(optionsJson).setMetricsOptions(metricsOptions);
+      eventBusOptions = getEventBusOptions(optionsJson.getJsonObject("eventBusOptions"));
+      metricsOptions = getMetricsOptions(optionsJson.getJsonObject("metricsOptions"));
+      options = new VertxOptions(optionsJson);
     }
+    options.setEventBusOptions(eventBusOptions).setMetricsOptions(metricsOptions);
 
     configureFromSystemProperties(options, VERTX_OPTIONS_PROP_PREFIX);
     beforeStartingVertx(options);
     Vertx instance;
     if (isClustered()) {
       log.info("Starting clustering...");
-      EventBusOptions eventBusOptions = options.getEventBusOptions();
+      eventBusOptions = options.getEventBusOptions();
       if (!Objects.equals(eventBusOptions.getHost(), EventBusOptions.DEFAULT_CLUSTER_HOST)) {
         clusterHost = eventBusOptions.getHost();
       }
@@ -226,20 +230,9 @@ public class BareCommand extends ClasspathHandler {
       if (eventBusOptions.getClusterPublicPort() != EventBusOptions.DEFAULT_CLUSTER_PUBLIC_PORT) {
         clusterPublicPort = eventBusOptions.getClusterPublicPort();
       }
-      if (clusterHost == null) {
-        clusterHost = getDefaultAddress();
-        if (clusterHost == null) {
-          log.error("Unable to find a default network interface for clustering. Please specify one using -cluster-host");
-          return null;
-        } else {
-          log.info("No cluster-host specified so using address " + clusterHost);
-        }
-      }
-      CountDownLatch latch = new CountDownLatch(1);
-      AtomicReference<AsyncResult<Vertx>> result = new AtomicReference<>();
 
-      eventBusOptions.setClustered(true)
-        .setHost(clusterHost).setPort(clusterPort)
+      eventBusOptions.setHost(clusterHost)
+        .setPort(clusterPort)
         .setClusterPublicHost(clusterPublicHost);
       if (clusterPublicPort != -1) {
         eventBusOptions.setClusterPublicPort(clusterPublicPort);
@@ -254,6 +247,8 @@ public class BareCommand extends ClasspathHandler {
         }
       }
 
+      CountDownLatch latch = new CountDownLatch(1);
+      AtomicReference<AsyncResult<Vertx>> result = new AtomicReference<>();
       create(options, ar -> {
         result.set(ar);
         latch.countDown();
@@ -351,6 +346,22 @@ public class BareCommand extends ClasspathHandler {
     }
     configureFromSystemProperties(metricsOptions, METRICS_OPTIONS_PROP_PREFIX);
     return metricsOptions;
+  }
+
+  /**
+   * @return the event bus options.
+   */
+  protected EventBusOptions getEventBusOptions() {
+    return getEventBusOptions(null);
+  }
+
+  /**
+   * @return the event bus options.
+   */
+  protected EventBusOptions getEventBusOptions(JsonObject jsonObject) {
+    EventBusOptions eventBusOptions = jsonObject == null ? new EventBusOptions() : new EventBusOptions(jsonObject);
+    configureFromSystemProperties(eventBusOptions, VERTX_EVENTBUS_PROP_PREFIX);
+    return eventBusOptions;
   }
 
   protected void configureFromSystemProperties(Object options, String prefix) {
@@ -461,29 +472,11 @@ public class BareCommand extends ClasspathHandler {
 
   /**
    * @return Get default interface to use since the user hasn't specified one.
+   * @deprecated as of 4.0, this method is no longer used.
    */
+  @Deprecated
   protected String getDefaultAddress() {
-    Enumeration<NetworkInterface> nets;
-    try {
-      nets = NetworkInterface.getNetworkInterfaces();
-    } catch (SocketException e) {
-      return null;
-    }
-    NetworkInterface netinf;
-    while (nets.hasMoreElements()) {
-      netinf = nets.nextElement();
-
-      Enumeration<InetAddress> addresses = netinf.getInetAddresses();
-
-      while (addresses.hasMoreElements()) {
-        InetAddress address = addresses.nextElement();
-        if (!address.isAnyLocalAddress() && !address.isMulticastAddress()
-          && !(address instanceof Inet6Address)) {
-          return address.getHostAddress();
-        }
-      }
-    }
-    return null;
+    return AddressHelper.defaultAddress();
   }
 
 

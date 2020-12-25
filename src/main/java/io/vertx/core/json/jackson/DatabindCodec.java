@@ -12,6 +12,7 @@
 package io.vertx.core.json.jackson;
 
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -57,6 +58,8 @@ public class DatabindCodec extends JacksonCodec {
     module.addDeserializer(Instant.class, new InstantDeserializer());
     module.addSerializer(byte[].class, new ByteArraySerializer());
     module.addDeserializer(byte[].class, new ByteArrayDeserializer());
+    module.addSerializer(Buffer.class, new BufferSerializer());
+    module.addDeserializer(Buffer.class, new BufferDeserializer());
 
     mapper.registerModule(module);
     prettyMapper.registerModule(module);
@@ -129,12 +132,17 @@ public class DatabindCodec extends JacksonCodec {
 
   public static <T> T fromParser(JsonParser parser, Class<T> type) throws DecodeException {
     T value;
+    JsonToken remaining;
     try {
       value = DatabindCodec.mapper.readValue(parser, type);
+      remaining = parser.nextToken();
     } catch (Exception e) {
       throw new DecodeException("Failed to decode:" + e.getMessage(), e);
     } finally {
       close(parser);
+    }
+    if (remaining != null) {
+      throw new DecodeException("Unexpected trailing token");
     }
     if (type == Object.class) {
       value = (T) adapt(value);

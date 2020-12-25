@@ -18,8 +18,8 @@ import io.netty.channel.ChannelInitializer;
 import io.vertx.core.VertxException;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.dns.AddressResolverOptions;
 import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.impl.AddressResolver;
 import io.vertx.core.impl.VertxImpl;
@@ -75,7 +75,6 @@ public class HostnameResolutionTest extends VertxTestBase {
   protected VertxOptions getOptions() {
     VertxOptions options = super.getOptions();
     options.getAddressResolverOptions().addServer(dnsServerAddress.getAddress().getHostAddress() + ":" + dnsServerAddress.getPort());
-    options.getAddressResolverOptions().setOptResourceEnabled(false);
     return options;
   }
 
@@ -144,13 +143,15 @@ public class HostnameResolutionTest extends VertxTestBase {
         listenLatch.countDown();
       }));
       awaitLatch(listenLatch);
-      client.getNow(8080, "vertx.io", "/somepath", onSuccess(resp -> {
-        Buffer buffer = Buffer.buffer();
-        resp.handler(buffer::appendBuffer);
-        resp.endHandler(v -> {
-          assertEquals(Buffer.buffer("foo"), buffer);
-          testComplete();
-        });
+      client.request(HttpMethod.GET, 8080, "vertx.io", "/somepath", onSuccess(req -> {
+        req.send(onSuccess(resp -> {
+          Buffer buffer = Buffer.buffer();
+          resp.handler(buffer::appendBuffer);
+          resp.endHandler(v -> {
+            assertEquals(Buffer.buffer("foo"), buffer);
+            testComplete();
+          });
+        }));
       }));
       await();
     } finally {

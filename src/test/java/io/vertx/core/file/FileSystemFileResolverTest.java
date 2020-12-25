@@ -15,9 +15,10 @@ import org.junit.Test;
 
 import java.io.File;
 
-import org.junit.Test;
-
-import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -25,9 +26,8 @@ import java.io.File;
 public class FileSystemFileResolverTest extends FileResolverTestBase {
 
   @Override
-  public void setUp() throws Exception {
-    super.setUp();
-    webRoot = "webroot";
+  protected ClassLoader resourcesLoader(File baseDir) throws Exception {
+    return new URLClassLoader(new URL[]{new File(baseDir, "files").toURI().toURL()}, Thread.currentThread().getContextClassLoader());
   }
 
   @Test
@@ -35,5 +35,41 @@ public class FileSystemFileResolverTest extends FileResolverTestBase {
     File file = resolver.resolveFile("this+that");
     assertFalse(file.exists());
     assertEquals("this+that", file.getPath());
+  }
+
+  @Test
+  public void testResolveInvalidFileName()  throws Exception{
+    for (int i = 0;i < 256;i++) {
+      String s = "file-" + (char) i + "-";
+      File f = File.createTempFile("vertx", ".txt");
+      Files.write(f.toPath(), "the_content".getBytes());
+      Thread thread = Thread.currentThread();
+      ClassLoader prev = thread.getContextClassLoader();
+      ClassLoader next = new URLClassLoader(new URL[0], prev) {
+        @Override
+        public URL getResource(String name) {
+          if (s.equals(name)) {
+            try {
+              return f.toURL();
+            } catch (MalformedURLException e) {
+              fail(e);
+            }
+          }
+          return super.getResource(name);
+        }
+      };
+      thread.setContextClassLoader(next);
+      try {
+        File file = resolver.resolveFile(s);
+        assertNotNull(file);
+      } finally {
+        thread.setContextClassLoader(prev);
+      }
+    }
+  }
+
+  @Override
+  public void testResolveFileWithSpaceAtEndFromClasspath() {
+
   }
 }

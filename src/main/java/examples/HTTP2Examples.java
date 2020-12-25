@@ -160,24 +160,29 @@ public class HTTP2Examples {
 
   public void example13(HttpClient client) {
 
-    HttpClientRequest request = client.get("/index.html", response -> {
-      // Process index.html response
+    client.request(HttpMethod.GET, "/index.html")
+      .onSuccess(request -> {
+
+        request
+          .response().onComplete(response -> {
+            // Process index.html response
+          });
+
+        // Set a push handler to be aware of any resource pushed by the server
+        request.pushHandler(pushedRequest -> {
+
+          // A resource is pushed for this request
+          System.out.println("Server pushed " + pushedRequest.path());
+
+          // Set an handler for the response
+          pushedRequest.response().onComplete(pushedResponse -> {
+            System.out.println("The response for the pushed request");
+          });
+        });
+
+        // End the request
+        request.end();
     });
-
-    // Set a push handler to be aware of any resource pushed by the server
-    request.pushHandler(pushedRequest -> {
-
-      // A resource is pushed for this request
-      System.out.println("Server pushed " + pushedRequest.path());
-
-      // Set an handler for the response
-      pushedRequest.setHandler(pushedResponse -> {
-        System.out.println("The response for the pushed request");
-      });
-    });
-
-    // End the request
-    request.end();
   }
 
   public void example14(HttpClientRequest request) {
@@ -214,8 +219,8 @@ public class HTTP2Examples {
     HttpConnection connection = request.connection();
   }
 
-  public void example19(HttpClientRequest request) {
-    request.connectionHandler(connection -> {
+  public void example19(HttpClient client) {
+    client.connectionHandler(connection -> {
       System.out.println("Connected to the server");
     });
   }

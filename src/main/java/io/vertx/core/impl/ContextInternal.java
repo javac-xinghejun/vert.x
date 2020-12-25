@@ -12,16 +12,12 @@
 package io.vertx.core.impl;
 
 import io.netty.channel.EventLoop;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Promise;
-import io.vertx.core.Vertx;
+import io.netty.util.concurrent.FastThreadLocalThread;
+import io.vertx.core.*;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.spi.tracing.VertxTracer;
 
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
 
 /**
  * This interface provides an api for vert.x core internal use only
@@ -30,7 +26,18 @@ import java.util.concurrent.Executor;
  *
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-public interface ContextInternal extends Context, Executor {
+public interface ContextInternal extends Context {
+
+  /**
+   * @return the current context
+   */
+  static ContextInternal current() {
+    Thread current = Thread.currentThread();
+    if (current instanceof VertxThread) {
+      return ((VertxThread) current).context();
+    }
+    return null;
+  }
 
   /**
    * Return the Netty EventLoop used by this Context. This can be used to integrate
@@ -41,21 +48,13 @@ public interface ContextInternal extends Context, Executor {
   EventLoop nettyEventLoop();
 
   /**
-   * {@inheritDoc}
-   * <br/>
-   * Execution follows the same semantics than {@link #runOnContext(Handler)}, simply put it is equivalent
-   * to {@code runOncontext(v -> command.run())}.
-   */
-  @Override
-  void execute(Runnable command);
-
-  /**
    * @return a {@link Promise} associated with this context
    */
   <T> PromiseInternal<T> promise();
 
   /**
-   * @return a {@link Promise} associated with this context
+   * @return a {@link Promise} associated with this context or the {@code handler}
+   *         if that handler is already an instance of {@code PromiseInternal}
    */
   <T> PromiseInternal<T> promise(Handler<AsyncResult<T>> handler);
 
@@ -96,10 +95,17 @@ public interface ContextInternal extends Context, Executor {
    */
   <T> void executeBlockingInternal(Handler<Promise<T>> action, Handler<AsyncResult<T>> resultHandler);
 
+  <T> void executeBlockingInternal(Handler<Promise<T>> action, boolean ordered, Handler<AsyncResult<T>> resultHandler);
+
   /**
    * Like {@link #executeBlockingInternal(Handler, Handler)} but returns a {@code Future} of the asynchronous result
    */
   <T> Future<T> executeBlockingInternal(Handler<Promise<T>> action);
+
+  /**
+   * Like {@link #executeBlockingInternal(Handler, boolean, Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  <T> Future<T> executeBlockingInternal(Handler<Promise<T>> action, boolean ordered);
 
   /**
    * @return the deployment associated with this context or {@code null}
@@ -110,48 +116,49 @@ public interface ContextInternal extends Context, Executor {
   VertxInternal owner();
 
   /**
+   * Emit the given {@code argument} event to the {@code task} and switch on this context if necessary, this also associates the
+   * current thread with the current context so {@link Vertx#currentContext()} returns this context.
+   * <br/>
+   * Any exception thrown from the {@literal task} will be reported on this context.
+   * <br/>
+   * Calling this method is equivalent to {@code execute(v -> dispatch(argument, task))}
+   *
+   * @param argument the {@code task} argument
+   * @param task the handler to execute with the {@code event} argument
+   */
+  <T> void emit(T argument, Handler<T> task);
+
+  /**
    * @see #emit(Object, Handler)
    */
-  void emitFromIO(Handler<Void> handler);
+  void emit(Handler<Void> task);
 
   /**
-   * Emit the {@code event} to the {@code handler} and switch on this context if necessary, this also associates the
-   * current thread with the current context so {@link Vertx#currentContext()} returns this context.<p/>
-   *
-   * The caller thread is assumed to be the event loop thread of this context.<p/>
-   *
-   * Any exception thrown from the {@literal handler} will be reported on this context.
-   *
-   * @param event the event for the {@code handler}
-   * @param handler the handler to execute with the {@code event} argument
+   * @see #execute(Object, Handler)
    */
-  <T> void emitFromIO(T event, Handler<T> handler);
+  void execute(Handler<Void> task);
 
   /**
-   * Emit the {@code event} to the {@code handler} and switch on this context if necessary, this also associates the
-   * current thread with the current context so {@link Vertx#currentContext()} returns this context.<p/>
+   * Execute the {@code task} on this context, it will be executed according to the
+   * context concurrency model.
    *
-   * Any exception thrown from the {@literal handler} will be reported on this context.
-   *
-   * @param event the event for the {@code handler}
-   * @param handler the handler to execute with the {@code event} argument
+   * @param task the task to execute
    */
-  <E> void emit(E event, Handler<E> handler);
+  void execute(Runnable task);
 
   /**
-   * @see #schedule(Object, Handler)
+   * Execute a {@code task} on this context, the task will be executed according to the
+   * context concurrency model.
+   *
+   * @param argument the {@code task} argument
+   * @param task the task to execute
    */
-  void schedule(Handler<Void> task);
+  <T> void execute(T argument, Handler<T> task);
 
   /**
-   * Schedule a task to be executed on this context, the task will be executed according to the
-   * context concurrency model, on an event-loop context, the task is executed directly, on a worker
-   * context the task is executed on the worker thread pool.
-   *
-   * @param value the task value
-   * @param task the task
+   * @return whether the current thread is running on this context
    */
-  <T> void schedule(T value, Handler<T> task);
+  boolean isRunningOnContext();
 
   /**
    * @see #dispatch(Handler)
@@ -164,24 +171,27 @@ public interface ContextInternal extends Context, Executor {
   void dispatch(Handler<Void> handler);
 
   /**
-   * Dispatch a {@code event} to the {@code handler} on this context. The handler is executed directly by the caller thread which must be a
-   * {@link VertxThread}.
+   * Dispatch an {@code event} to the {@code handler} on this context.
+   * <p>
+   * The handler is executed directly by the caller thread which must be a {@link VertxThread} or a {@link FastThreadLocalThread}.
    * <p>
    * The handler execution is monitored by the blocked thread checker.
    * <p>
    * This context is thread-local associated during the task execution.
    *
    * @param event the event for the {@code handler}
-   * @param handler the handler to execute with the {@code event} argument
+   * @param handler the handler to execute with the {@code event}
    */
   <E> void dispatch(E event, Handler<E> handler);
 
   /**
-   * Begin the dispatch of a task on this context.
+   * Begin the execution of a task on this context.
    * <p>
    * The task execution is monitored by the blocked thread checker.
    * <p>
    * This context is thread-local associated during the task execution.
+   * <p>
+   * You should not use this API directly, instead you should use {@link #dispatch(Object, Handler)}
    *
    * @return the previous context that shall be restored after or {@code null} if there is none
    * @throws IllegalStateException when the current thread of execution cannot execute this task
@@ -189,12 +199,14 @@ public interface ContextInternal extends Context, Executor {
   ContextInternal beginDispatch();
 
   /**
-   * End the dispatch of a task on this context.
+   * End the execution of a task on this context, see {@link #beginDispatch()}
+   * <p>
+   * You should not use this API directly, instead you should use {@link #dispatch(Object, Handler)}
    *
-   * @param prev the previous context to restore or {@code null} if there is none
+   * @param previous the previous context to restore or {@code null} if there is none
    * @throws IllegalStateException when the current thread of execution cannot execute this task
    */
-  void endDispatch(ContextInternal prev);
+  void endDispatch(ContextInternal previous);
 
   /**
    * Report an exception to this context synchronously.
@@ -223,32 +235,68 @@ public interface ContextInternal extends Context, Executor {
   ClassLoader classLoader();
 
   /**
+   * @return the context worker pool
+   */
+  WorkerPool workerPool();
+
+  /**
    * @return the tracer for this context
    */
   VertxTracer tracer();
 
   /**
-   * Returns a context which shares the whole behavior of this context but not the {@link #localContextData()} which
-   * remains private to the context:
+   * Returns a context sharing with this context
    * <ul>
-   *   <li>same concurrency</li>
-   *   <li>same exception handler</li>
-   *   <li>same context context</li>
-   *   <li>same deployment</li>
-   *   <li>same config</li>
-   *   <li>same classloader</li>
+   *   <li>the same concurrency</li>
+   *   <li>the same exception handler</li>
+   *   <li>the same context data</li>
+   *   <li>the same deployment</li>
+   *   <li>the same config</li>
+   *   <li>the same classloader</li>
    * </ul>
    * <p>
-   * The duplicated context will have its own private local context data.
+   * The duplicate context has its own
+   * <ul>
+   *   <li>local context data</li>
+   *   <li>worker task queue</li>
+   * </ul>
    *
-   * @return a context whose behavior will is equivalent to this context but with new private
+   * @return a duplicate of this context
    */
   ContextInternal duplicate();
 
   /**
-   * Like {@link #duplicate()} but the duplicated context local data will adopt the local data of the specified
-   * {@code context} argument.
+   * Like {@link Vertx#setPeriodic(long, Handler)} except the periodic timer will fire on this context.
    */
-  ContextInternal duplicate(ContextInternal context);
+  long setPeriodic(long delay, Handler<Long> handler);
+
+  /**
+   * Like {@link Vertx#setTimer(long, Handler)} except the timer will fire on this context.
+   */
+  long setTimer(long delay, Handler<Long> handler);
+
+  /**
+   * @return {@code true} when the context is associated with a deployment
+   */
+  boolean isDeployment();
+
+  /**
+   * Add a close hook.
+   *
+   * <p> The {@code hook} will be called when the associated resource needs to be released. Hooks are useful
+   * for automatically cleanup resources when a Verticle is undeployed.
+   *
+   * @param hook the close hook
+   */
+  void addCloseHook(Closeable hook);
+
+  /**
+   * Remove a close hook.
+   *
+   * <p> This is called when the resource is released explicitly and does not need anymore a managed close.
+   *
+   * @param hook the close hook
+   */
+  void removeCloseHook(Closeable hook);
 
 }

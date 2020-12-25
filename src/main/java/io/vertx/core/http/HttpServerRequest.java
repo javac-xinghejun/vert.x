@@ -11,7 +11,6 @@
 
 package io.vertx.core.http;
 
-import io.netty.handler.codec.http2.Http2CodecUtil;
 import io.vertx.codegen.annotations.*;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -26,7 +25,6 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
 import javax.security.cert.X509Certificate;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Represents a server-side HTTP request.
@@ -36,7 +34,7 @@ import java.util.Set;
  * Each instance of this class is associated with a corresponding {@link HttpServerResponse} instance via
  * {@link #response}.<p>
  * It implements {@link io.vertx.core.streams.ReadStream} so it can be used with
- * {@link io.vertx.core.streams.Pump} to pump data with flow control.
+ * {@link io.vertx.core.streams.Pipe} to pipe data with flow control.
  * <p>
  *
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -73,14 +71,11 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   HttpMethod method();
 
   /**
-   * @return the HTTP method as sent by the client
-   */
-  String rawMethod();
-
-  /**
    * @return true if this {@link io.vertx.core.net.NetSocket} is encrypted via SSL/TLS
    */
-  boolean isSSL();
+  default boolean isSSL() {
+    return connection().isSsl();
+  }
 
   /**
    * @return the scheme of the request
@@ -136,7 +131,9 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @return the header value
    */
   @Nullable
-  String getHeader(String headerName);
+  default String getHeader(String headerName) {
+    return headers().get(headerName);
+  }
 
   /**
    * Return the first header value with the specified name
@@ -145,7 +142,9 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @return the header value
    */
   @GenIgnore(GenIgnore.PERMITTED_TYPE)
-  String getHeader(CharSequence headerName);
+  default String getHeader(CharSequence headerName) {
+    return headers().get(headerName);
+  }
 
   /**
    * @return the query parameters in the request
@@ -160,20 +159,27 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @return the param value
    */
   @Nullable
-  String getParam(String paramName);
-
-
-  /**
-   * @return the remote (client side) address of the request
-   */
-  @CacheReturn
-  SocketAddress remoteAddress();
+  default String getParam(String paramName) {
+    return params().get(paramName);
+  }
 
   /**
-   * @return the local (server side) address of the server that handles the request
+   * @return the remote address for this connection, possibly {@code null} (e.g a server bound on a domain socket).
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the actual connecting client.
    */
   @CacheReturn
-  SocketAddress localAddress();
+  default SocketAddress remoteAddress() {
+    return connection().remoteAddress();
+  }
+
+  /**
+   * @return the local address for this connection, possibly {@code null} (e.g a server bound on a domain socket)
+   * If {@code useProxyProtocol} is set to {@code true}, the address returned will be of the proxy.
+   */
+  @CacheReturn
+  default SocketAddress localAddress() {
+    return connection().localAddress();
+  }
 
   /**
    * @return SSLSession associated with the underlying socket. Returns null if connection is
@@ -181,7 +187,9 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @see javax.net.ssl.SSLSession
    */
   @GenIgnore(GenIgnore.PERMITTED_TYPE)
-  SSLSession sslSession();
+  default SSLSession sslSession() {
+    return connection().sslSession();
+  }
 
   /**
    * Note: Java SE 5+ recommends to use javax.net.ssl.SSLSession#getPeerCertificates() instead of
@@ -212,11 +220,7 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    */
   @Fluent
   default HttpServerRequest bodyHandler(@Nullable Handler<Buffer> bodyHandler) {
-    if (bodyHandler != null) {
-      Buffer body = Buffer.buffer();
-      handler(body::appendBuffer);
-      endHandler(v -> bodyHandler.handle(body));
-    }
+    body().onSuccess(bodyHandler);
     return this;
   }
 
@@ -224,7 +228,7 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * Same as {@link #body()} but with an {@code handler} called when the operation completes
    */
   default HttpServerRequest body(Handler<AsyncResult<Buffer>> handler) {
-    body().setHandler(handler);
+    body().onComplete(handler);
     return this;
   }
 
@@ -239,13 +243,28 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   Future<Buffer> body();
 
   /**
-   * Get a net socket for the underlying connection of this request.
-   * <p/>
-   * This method must be called before the server response is ended.
-   * <p/>
-   * With {@code CONNECT} requests, a {@code 200} response is sent with no {@code content-length} header set
-   * before returning the socket.
-   * <p/>
+   * Same as {@link #end()} but with an {@code handler} called when the operation completes
+   */
+  default void end(Handler<AsyncResult<Void>> handler) {
+    end().onComplete(handler);
+  }
+
+  /**
+   * Returns a future signaling when the request has been fully received successfully or failed.
+   *
+   * @return a future completed with the body result
+   */
+  Future<Void> end();
+
+  /**
+   * Establish a TCP <a href="https://tools.ietf.org/html/rfc7231#section-4.3.6">tunnel<a/> with the client.
+   *
+   * <p> This must be called only for {@code CONNECT} HTTP method and before any response is sent.
+   *
+   * <p> Calling this sends a {@code 200} response with no {@code content-length} header set and
+   * then provides the {@code NetSocket} for handling the created tunnel. Any HTTP header set on the
+   * response before calling this method will be sent.
+   *
    * <pre>
    * server.requestHandler(req -> {
    *   if (req.method() == HttpMethod.CONNECT) {
@@ -258,20 +277,20 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    *   ...
    * });
    * </pre>
-   * <p/>
-   * For other HTTP/1 requests once you have called this method, you must handle writing to the connection yourself using
-   * the net socket, the server request instance will no longer be usable as normal. USE THIS WITH CAUTION! Writing to the socket directly if you don't know what you're
-   * doing can easily break the HTTP protocol.
-   * <p/>
-   * With HTTP/2, a {@code 200} response is always sent with no {@code content-length} header set before returning the socket
-   * like in the {@code CONNECT} case above.
-   * <p/>
    *
-   * @return the net socket
-   * @throws IllegalStateException when the socket can't be created
+   * @param handler the completion handler
    */
-  @CacheReturn
-  NetSocket netSocket();
+  default void toNetSocket(Handler<AsyncResult<NetSocket>> handler) {
+    Future<NetSocket> fut = toNetSocket();
+    if (handler != null) {
+      fut.onComplete(handler);
+    }
+  }
+
+  /**
+   * Like {@link #toNetSocket(Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<NetSocket> toNetSocket();
 
   /**
    * Call this with true if you are expecting a multi-part body to be submitted in the request.
@@ -320,16 +339,40 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
   String getFormAttribute(String attributeName);
 
   /**
-   * Upgrade the connection to a WebSocket connection.
+   * @return the id of the stream of this request, {@literal -1} when it is not yet determined, i.e
+   *         the request has not been yet sent or it is not supported HTTP/1.x
+   */
+  @CacheReturn
+  default int streamId() {
+    return -1;
+  }
+
+  /**
+   * Upgrade the connection of the current request to a WebSocket.
    * <p>
    * This is an alternative way of handling WebSockets and can only be used if no WebSocket handler is set on the
    * {@code HttpServer}, and can only be used during the upgrade request during the WebSocket handshake.
    *
-   * @return the WebSocket
-   * @throws IllegalStateException if the current request cannot be upgraded, when it happens an appropriate response
-   *                               is sent
+   * <p> Both {@link #handler(Handler)} and {@link #endHandler(Handler)} will be set to get the full body of the
+   * request that is necessary to perform the WebSocket handshake.
+   *
+   * <p> If you need to do an asynchronous upgrade, i.e not performed immediately in your request handler,
+   * you need to {@link #pause()} the request in order to not lose HTTP events necessary to upgrade the
+   * request.
+   *
+   * @param handler the completion handler
    */
-  ServerWebSocket upgrade();
+  default void toWebSocket(Handler<AsyncResult<ServerWebSocket>> handler) {
+    Future<ServerWebSocket> fut = toWebSocket();
+    if (handler != null) {
+      fut.onComplete(handler);
+    }
+  }
+
+  /**
+   * Like {@link #toWebSocket(Handler)} but returns a {@code Future} of the asynchronous result
+   */
+  Future<ServerWebSocket> toWebSocket();
 
   /**
    * Has the request ended? I.e. has the entire request, including the body been read?
@@ -376,16 +419,31 @@ public interface HttpServerRequest extends ReadStream<Buffer> {
    * @param name  the cookie name
    * @return the cookie
    */
-  @Nullable Cookie getCookie(String name);
+  default @Nullable Cookie getCookie(String name) {
+    return cookieMap().get(name);
+  }
 
   /**
    * @return the number of cookieMap.
    */
-  int cookieCount();
+  default int cookieCount() {
+    return cookieMap().size();
+  }
 
   /**
    * @return a map of all the cookies.
    */
   Map<String, Cookie> cookieMap();
+
+	/**
+	 * Marks this request as being routed to the given route. This is purely informational and is
+	 * being provided to metrics.
+	 *
+	 * @param route The route this request has been routed to.
+	 */
+	@Fluent
+	default HttpServerRequest routed(String route) {
+	  return this;
+  }
 
 }

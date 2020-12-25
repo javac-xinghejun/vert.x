@@ -24,6 +24,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.vertx.core.http.HttpTestBase.DEFAULT_HTTP_HOST;
+import static io.vertx.core.http.HttpTestBase.DEFAULT_HTTP_PORT;
+
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
@@ -55,7 +58,7 @@ public class HttpRequestStreamTest extends VertxTestBase {
   @Test
   public void testReadStreamPauseResume() {
     String path = "/some/path";
-    this.server = vertx.createHttpServer(new HttpServerOptions().setAcceptBacklog(10).setPort(HttpTestBase.DEFAULT_HTTP_PORT));
+    this.server = vertx.createHttpServer(new HttpServerOptions().setAcceptBacklog(10).setPort(DEFAULT_HTTP_PORT));
     ReadStream<HttpServerRequest> httpStream = server.requestStream();
     AtomicBoolean paused = new AtomicBoolean();
     httpStream.handler(req -> {
@@ -68,10 +71,12 @@ public class HttpRequestStreamTest extends VertxTestBase {
       assertTrue(listenAR.succeeded());
       paused.set(true);
       httpStream.pause();
+
       netClient = vertx.createNetClient(new NetClientOptions().setConnectTimeout(1000));
-      netClient.connect(HttpTestBase.DEFAULT_HTTP_PORT, "localhost", socketAR -> {
+      netClient.connect(DEFAULT_HTTP_PORT, "localhost", socketAR -> {
         assertTrue(socketAR.succeeded());
         NetSocket socket = socketAR.result();
+        socket.write("GET / HTTP/1.1\r\n\r\n");
         Buffer buffer = Buffer.buffer();
         socket.handler(buffer::appendBuffer);
         socket.closeHandler(v -> {
@@ -79,10 +84,17 @@ public class HttpRequestStreamTest extends VertxTestBase {
           paused.set(false);
           httpStream.resume();
           client = vertx.createHttpClient(new HttpClientOptions());
-          client.request(HttpMethod.GET, HttpTestBase.DEFAULT_HTTP_PORT, "localhost", path, onSuccess(resp -> {
-            assertEquals(200, resp.statusCode());
-            testComplete();
-          })).end();
+          client.request(new RequestOptions()
+            .setPort(DEFAULT_HTTP_PORT)
+            .setHost(DEFAULT_HTTP_HOST)
+            .setURI(path)
+          )
+            .onComplete(onSuccess(req -> {
+              req.send(onSuccess(resp -> {
+                assertEquals(200, resp.statusCode());
+                testComplete();
+              }));
+            }));
         });
       });
     });
@@ -91,18 +103,16 @@ public class HttpRequestStreamTest extends VertxTestBase {
 
   @Test
   public void testClosingServerClosesRequestStreamEndHandler() {
-    this.server = vertx.createHttpServer(new HttpServerOptions().setPort(HttpTestBase.DEFAULT_HTTP_PORT));
+    waitFor(2);
+    this.server = vertx.createHttpServer(new HttpServerOptions().setPort(DEFAULT_HTTP_PORT));
     ReadStream<HttpServerRequest> stream = server.requestStream();
-    AtomicBoolean closed = new AtomicBoolean();
-    stream.endHandler(v -> closed.set(true));
+    stream.endHandler(v -> complete());
     stream.handler(req -> {});
     server.listen(ar -> {
       assertTrue(ar.succeeded());
-      assertFalse(closed.get());
       server.close(v -> {
         assertTrue(ar.succeeded());
-        assertTrue(closed.get());
-        testComplete();
+        complete();
       });
     });
     await();
@@ -110,7 +120,7 @@ public class HttpRequestStreamTest extends VertxTestBase {
 
   @Test
   public void testCloseServerAsynchronously() {
-    this.server = vertx.createHttpServer(new HttpServerOptions().setPort(HttpTestBase.DEFAULT_HTTP_PORT));
+    this.server = vertx.createHttpServer(new HttpServerOptions().setPort(DEFAULT_HTTP_PORT));
     AtomicInteger done = new AtomicInteger();
     ReadStream<HttpServerRequest> stream = server.requestStream();
     stream.handler(req -> {});
@@ -126,16 +136,12 @@ public class HttpRequestStreamTest extends VertxTestBase {
     server.listen(ar -> {
       assertTrue(Vertx.currentContext().isEventLoopContext());
       assertNull(stack.get());
-      ThreadLocal<Object> stack2 = new ThreadLocal<>();
-      stack2.set(true);
       server.close(v -> {
         assertTrue(Vertx.currentContext().isEventLoopContext());
-        assertNull(stack2.get());
         if (done.incrementAndGet() == 2) {
           testComplete();
         }
       });
-      stack2.set(null);
     });
     await();
   }

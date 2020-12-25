@@ -13,7 +13,6 @@ package io.vertx.core.net;
 
 import io.vertx.core.Vertx;
 import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.impl.KeyStoreHelper;
 
 import javax.net.ssl.TrustManager;
@@ -40,9 +39,7 @@ public interface TrustOptions {
    * @param vertx the vertx instance
    * @return the trust manager factory
    */
-  default TrustManagerFactory getTrustManagerFactory(Vertx vertx) throws Exception {
-    return KeyStoreHelper.create((VertxInternal) vertx, this).getTrustMgrFactory((VertxInternal) vertx);
-  }
+  TrustManagerFactory getTrustManagerFactory(Vertx vertx) throws Exception;
 
   /**
    * Returns a function that maps SNI server names to a {@link TrustManagerFactory} instance.
@@ -56,11 +53,6 @@ public interface TrustOptions {
    * @param vertx the vertx instance
    * @return the trustManager
    */
-  default Function<String, TrustManager[]> trustManagerMapper(Vertx vertx) throws Exception {
-    KeyStoreHelper helper = KeyStoreHelper.create((VertxInternal) vertx, this);
-    return helper != null ? helper::getTrustMgr : null;
-  }
-
-  JsonObject toJson();
+  Function<String, TrustManager[]> trustManagerMapper(Vertx vertx) throws Exception;
 
 }

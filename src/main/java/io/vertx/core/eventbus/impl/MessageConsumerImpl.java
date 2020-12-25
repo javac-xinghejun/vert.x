@@ -69,20 +69,20 @@ public class MessageConsumerImpl<T> extends HandlerRegistration<T> implements Me
       if (overflow <= 0) {
         return this;
       }
-      discardHandler = this.discardHandler;
-      if (discardHandler == null) {
-        while (pending.size() > maxBufferedMessages) {
-          pending.poll();
-        }
+      if (pending.isEmpty()) {
         return this;
       }
+      discardHandler = this.discardHandler;
       discarded = new ArrayList<>(overflow);
       while (pending.size() > maxBufferedMessages) {
         discarded.add(pending.poll());
       }
     }
     for (Message<T> msg : discarded) {
-      discardHandler.handle(msg);
+      if (discardHandler != null) {
+        discardHandler.handle(msg);
+      }
+      discard(msg);
     }
     return this;
   }
@@ -101,51 +101,59 @@ public class MessageConsumerImpl<T> extends HandlerRegistration<T> implements Me
   public synchronized void completionHandler(Handler<AsyncResult<Void>> handler) {
     Objects.requireNonNull(handler);
     if (result != null) {
-      result.future().setHandler(handler);
+      result.future().onComplete(handler);
     } else {
       completionHandler = handler;
     }
   }
 
-  protected synchronized void doUnregister() {
+  @Override
+  public synchronized Future<Void> unregister() {
     handler = null;
     if (endHandler != null) {
       endHandler.handle(null);
     }
-    if (pending.size() > 0 && discardHandler != null) {
+    if (pending.size() > 0) {
       Queue<Message<T>> discarded = pending;
       Handler<Message<T>> handler = discardHandler;
       pending = new ArrayDeque<>();
-      context.runOnContext(v -> {
-        Message<T> msg;
-        while ((msg = discarded.poll()) != null) {
-          handler.handle(msg);
+      for (Message<T> msg : discarded) {
+        discard(msg);
+        if (handler != null) {
+          context.emit(msg, handler);
         }
-      });
+      }
     }
     discardHandler = null;
-    if (result != null) {
-      result.tryFail("blah");
+    Future<Void> fut = super.unregister();
+
+    Promise<Void> res = result; // Alias reference because result can become null when the onComplete callback executes
+    if (res != null) {
+      fut.onComplete(ar -> res.tryFail("Consumer unregistered before registration completed"));
       result = null;
     }
+    return fut;
   }
 
-  protected void doReceive(Message<T> message) {
+  protected boolean doReceive(Message<T> message) {
     Handler<Message<T>> theHandler;
     synchronized (this) {
-      if (!isRegistered()) {
-        return;
-      } else if (demand == 0L) {
+      if (handler == null) {
+        return false;
+      }
+      if (demand == 0L) {
         if (pending.size() < maxBufferedMessages) {
           pending.add(message);
+          return true;
         } else {
+          discard(message);
           if (discardHandler != null) {
             discardHandler.handle(message);
           } else {
             log.warn("Discarding message as more than " + maxBufferedMessages + " buffered in paused consumer. address: " + address);
           }
         }
-        return;
+        return true;
       } else {
         if (pending.size() > 0) {
           pending.add(message);
@@ -158,15 +166,20 @@ public class MessageConsumerImpl<T> extends HandlerRegistration<T> implements Me
       }
     }
     deliver(theHandler, message);
+    return true;
+  }
+
+  @Override
+  protected void dispatch(Message<T> msg, ContextInternal context, Handler<Message<T>> handler) {
+    if (handler == null) {
+      throw new NullPointerException();
+    }
+    context.emit(msg, handler);
   }
 
   private void deliver(Handler<Message<T>> theHandler, Message<T> message) {
     // Handle the message outside the sync block
     // https://bugs.eclipse.org/bugs/show_bug.cgi?id=473714
-    String creditsAddress = message.headers().get(MessageProducerImpl.CREDIT_ADDRESS_HEADER_NAME);
-    if (creditsAddress != null) {
-      eventBus.send(creditsAddress, 1);
-    }
     dispatch(theHandler, message, context.duplicate());
     checkNextTick();
   }
@@ -174,7 +187,7 @@ public class MessageConsumerImpl<T> extends HandlerRegistration<T> implements Me
   private synchronized void checkNextTick() {
     // Check if there are more pending messages in the queue that can be processed next time around
     if (!pending.isEmpty() && demand > 0L) {
-      context.runOnContext(v -> {
+      context.nettyEventLoop().execute(() -> {
         Message<T> message;
         Handler<Message<T>> theHandler;
         synchronized (MessageConsumerImpl.this) {
@@ -206,10 +219,12 @@ public class MessageConsumerImpl<T> extends HandlerRegistration<T> implements Me
         if (result == null) {
           Promise<Void> p = context.promise();
           if (completionHandler != null) {
-            p.future().setHandler(completionHandler);
+            p.future().onComplete(completionHandler);
           }
           result = p;
-          register(null, localOnly, ar -> {
+          Promise<Void> reg = context.promise();
+          register(null, localOnly, reg);
+          reg.future().onComplete(ar -> {
             if (ar.succeeded()) {
               p.tryComplete();
             } else {

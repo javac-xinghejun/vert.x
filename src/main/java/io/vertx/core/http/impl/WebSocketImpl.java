@@ -13,8 +13,9 @@ package io.vertx.core.http.impl;
 
 import io.vertx.core.http.WebSocket;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
+
+import static io.vertx.core.spi.metrics.Metrics.METRICS_ENABLED;
 
 /**
  * This class is optimised for performance when used on the same event loop. However it can be used safely from other threads.
@@ -27,20 +28,36 @@ import io.vertx.core.spi.metrics.HttpClientMetrics;
  */
 public class WebSocketImpl extends WebSocketImplBase<WebSocketImpl> implements WebSocket {
 
+  private final Http1xClientConnection conn;
+  private final long closingTimeoutMS;
+
   public WebSocketImpl(ContextInternal context,
-                       Http1xClientConnection conn, boolean supportsContinuation,
-                       int maxWebSocketFrameSize, int maxWebSocketMessageSize) {
+                       Http1xClientConnection conn,
+                       boolean supportsContinuation,
+                       long closingTimeout,
+                       int maxWebSocketFrameSize,
+                       int maxWebSocketMessageSize) {
     super(context, conn, supportsContinuation, maxWebSocketFrameSize, maxWebSocketMessageSize);
+    this.conn = conn;
+    this.closingTimeoutMS = closingTimeout >= 0 ? closingTimeout * 1000L : -1L;
   }
 
   @Override
-  void handleClosed() {
-    synchronized (conn) {
-      HttpClientMetrics metrics = ((Http1xClientConnection) conn).metrics();
-      if (metrics != null) {
-        metrics.disconnected(getMetric());
-      }
+  protected void handleCloseConnection() {
+    if (closingTimeoutMS == 0L) {
+      closeConnection();
+    } else if (closingTimeoutMS > 0L) {
+      initiateConnectionCloseTimeout(closingTimeoutMS);
     }
-    super.handleClosed();
+  }
+
+  @Override
+  protected void handleClose(boolean graceful) {
+    HttpClientMetrics metrics = conn.metrics();
+    if (METRICS_ENABLED && metrics != null) {
+      metrics.disconnected(getMetric());
+      setMetric(null);
+    }
+    super.handleClose(graceful);
   }
 }

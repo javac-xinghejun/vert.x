@@ -21,24 +21,38 @@ import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Settings;
 import io.netty.util.AsciiString;
 import io.netty.util.CharsetUtil;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Context;
+import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.CaseInsensitiveHeaders;
-import io.vertx.core.http.HttpClientRequest;
-import io.vertx.core.http.HttpClientResponse;
+import io.vertx.core.file.AsyncFile;
+import io.vertx.core.file.FileSystem;
+import io.vertx.core.file.OpenOptions;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.http.StreamPriority;
+import io.vertx.core.impl.VertxInternal;
+import io.vertx.core.net.NetSocket;
 import io.vertx.core.spi.tracing.TagExtractor;
+import io.vertx.core.streams.WriteStream;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
+import static io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_X_WWW_FORM_URLENCODED;
+import static io.netty.handler.codec.http.HttpHeaderValues.MULTIPART_FORM_DATA;
 import static io.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 import static io.vertx.core.http.Http2Settings.*;
@@ -101,13 +115,13 @@ public final class HttpUtils {
     }
   };
 
-  static final TagExtractor<HttpClientRequest> CLIENT_REQUEST_TAG_EXTRACTOR = new TagExtractor<HttpClientRequest>() {
+  static final TagExtractor<HttpRequestHead> CLIENT_HTTP_REQUEST_TAG_EXTRACTOR = new TagExtractor<HttpRequestHead>() {
     @Override
-    public int len(HttpClientRequest req) {
+    public int len(HttpRequestHead req) {
       return 2;
     }
     @Override
-    public String name(HttpClientRequest req, int index) {
+    public String name(HttpRequestHead req, int index) {
       switch (index) {
         case 0:
           return "http.url";
@@ -117,33 +131,33 @@ public final class HttpUtils {
       throw new IndexOutOfBoundsException("Invalid tag index " + index);
     }
     @Override
-    public String value(HttpClientRequest req, int index) {
+    public String value(HttpRequestHead req, int index) {
       switch (index) {
         case 0:
-          return req.absoluteURI();
+          return req.absoluteURI;
         case 1:
-          return req.method().name();
+          return req.method.name();
       }
       throw new IndexOutOfBoundsException("Invalid tag index " + index);
     }
   };
 
-  static final TagExtractor<HttpClientResponse> CLIENT_RESPONSE_TAG_EXTRACTOR = new TagExtractor<HttpClientResponse>() {
+  static final TagExtractor<HttpResponseHead> CLIENT_RESPONSE_TAG_EXTRACTOR = new TagExtractor<HttpResponseHead>() {
     @Override
-    public int len(HttpClientResponse resp) {
+    public int len(HttpResponseHead resp) {
       return 1;
     }
     @Override
-    public String name(HttpClientResponse resp, int index) {
+    public String name(HttpResponseHead resp, int index) {
       if (index == 0) {
         return "http.status_code";
       }
       throw new IndexOutOfBoundsException("Invalid tag index " + index);
     }
     @Override
-    public String value(HttpClientResponse resp, int index) {
+    public String value(HttpResponseHead resp, int index) {
       if (index == 0) {
-        return "" + resp.statusCode();
+        return "" + resp.statusCode;
       }
       throw new IndexOutOfBoundsException("Invalid tag index " + index);
     }
@@ -378,36 +392,36 @@ public final class HttpUtils {
     if (_ref.getScheme() != null) {
       scheme = _ref.getScheme();
       authority = _ref.getAuthority();
-      path = removeDots(_ref.getPath());
+      path = removeDots(_ref.getRawPath());
       query = _ref.getRawQuery();
     } else {
       if (_ref.getAuthority() != null) {
         authority = _ref.getAuthority();
-        path = _ref.getPath();
+        path = _ref.getRawPath();
         query = _ref.getRawQuery();
       } else {
-        if (_ref.getPath().length() == 0) {
-          path = base.getPath();
+        if (_ref.getRawPath().length() == 0) {
+          path = base.getRawPath();
           if (_ref.getRawQuery() != null) {
             query = _ref.getRawQuery();
           } else {
             query = base.getRawQuery();
           }
         } else {
-          if (_ref.getPath().startsWith("/")) {
-            path = removeDots(_ref.getPath());
+          if (_ref.getRawPath().startsWith("/")) {
+            path = removeDots(_ref.getRawPath());
           } else {
             // Merge paths
             String mergedPath;
-            String basePath = base.getPath();
+            String basePath = base.getRawPath();
             if (base.getAuthority() != null && basePath.length() == 0) {
-              mergedPath = "/" + _ref.getPath();
+              mergedPath = "/" + _ref.getRawPath();
             } else {
               int index = basePath.lastIndexOf('/');
               if (index > -1) {
-                mergedPath = basePath.substring(0, index + 1) + _ref.getPath();
+                mergedPath = basePath.substring(0, index + 1) + _ref.getRawPath();
               } else {
-                mergedPath = _ref.getPath();
+                mergedPath = _ref.getRawPath();
               }
             }
             path = removeDots(mergedPath);
@@ -425,6 +439,9 @@ public final class HttpUtils {
    * Extract the path out of the uri.
    */
   static String parsePath(String uri) {
+    if (uri.length() == 0) {
+      return "";
+    }
     int i;
     if (uri.charAt(0) == '/') {
       i = 0;
@@ -481,7 +498,7 @@ public final class HttpUtils {
   static MultiMap params(String uri) {
     QueryStringDecoder queryStringDecoder = new QueryStringDecoder(uri);
     Map<String, List<String>> prms = queryStringDecoder.parameters();
-    MultiMap params = new CaseInsensitiveHeaders();
+    MultiMap params = MultiMap.caseInsensitiveMultiMap();
     if (!prms.isEmpty()) {
       for (Map.Entry<String, List<String>> entry: prms.entrySet()) {
         params.add(entry.getKey(), entry.getValue());
@@ -601,7 +618,7 @@ public final class HttpUtils {
     if (reason != null)
       return Unpooled.copiedBuffer(
         Unpooled.copyShort(statusCode), // First two bytes are reserved for status code
-        Unpooled.copiedBuffer(reason, Charset.forName("UTF-8"))
+        Unpooled.copiedBuffer(reason, StandardCharsets.UTF_8)
       );
     else
       return Unpooled.copyShort(statusCode);
@@ -643,6 +660,28 @@ public final class HttpUtils {
     return loc;
   }
 
+  /**
+   * @return convert the {@code sequence} to a lower case instance
+   */
+  public static CharSequence toLowerCase(CharSequence sequence) {
+    StringBuilder buffer = null;
+    int len = sequence.length();
+    for (int index = 0; index < len; index++) {
+      char c = sequence.charAt(index);
+      if (c >= 'A' && c <= 'Z') {
+        if (buffer == null) {
+          buffer = new StringBuilder(sequence);
+        }
+        buffer.setCharAt(index, (char)(c + ('a' - 'A')));
+      }
+    }
+    if (buffer != null) {
+      return buffer.toString();
+    } else {
+      return sequence;
+    }
+  }
+
   private static class CustomCompressor extends HttpContentCompressor {
     @Override
     public ZlibWrapper determineWrapper(String acceptEncoding) {
@@ -667,41 +706,6 @@ public final class HttpUtils {
     return null;
   }
 
-  static HttpMethod toNettyHttpMethod(io.vertx.core.http.HttpMethod method, String rawMethod) {
-    switch (method) {
-      case CONNECT: {
-        return HttpMethod.CONNECT;
-      }
-      case GET: {
-        return HttpMethod.GET;
-      }
-      case PUT: {
-        return HttpMethod.PUT;
-      }
-      case POST: {
-        return HttpMethod.POST;
-      }
-      case DELETE: {
-        return HttpMethod.DELETE;
-      }
-      case HEAD: {
-        return HttpMethod.HEAD;
-      }
-      case OPTIONS: {
-        return HttpMethod.OPTIONS;
-      }
-      case TRACE: {
-        return HttpMethod.TRACE;
-      }
-      case PATCH: {
-        return HttpMethod.PATCH;
-      }
-      default: {
-        return HttpMethod.valueOf(rawMethod);
-      }
-    }
-  }
-
   static HttpVersion toNettyHttpVersion(io.vertx.core.http.HttpVersion version) {
     switch (version) {
       case HTTP_1_0: {
@@ -716,11 +720,7 @@ public final class HttpUtils {
   }
 
   static io.vertx.core.http.HttpMethod toVertxMethod(String method) {
-    try {
-      return io.vertx.core.http.HttpMethod.valueOf(method);
-    } catch (IllegalArgumentException e) {
-      return io.vertx.core.http.HttpMethod.OTHER;
-    }
+    return io.vertx.core.http.HttpMethod.valueOf(method);
   }
 
   private static final AsciiString TIMEOUT_EQ = AsciiString.of("timeout=");
@@ -770,12 +770,18 @@ public final class HttpUtils {
 
   public static void validateHeader(CharSequence name, CharSequence value) {
     validateHeaderName(name);
-    validateHeaderValue(value);
+    if (value != null) {
+      validateHeaderValue(value);
+    }
   }
 
   public static void validateHeader(CharSequence name, Iterable<? extends CharSequence> values) {
     validateHeaderName(name);
-    values.forEach(HEADER_VALUE_VALIDATOR);
+    values.forEach(value -> {
+      if (value != null) {
+        HEADER_VALUE_VALIDATOR.accept(value);
+      }
+    });
   }
 
   public static void validateHeaderValue(CharSequence seq) {
@@ -866,6 +872,41 @@ public final class HttpUtils {
               value);
           }
       }
+    }
+  }
+
+  public static boolean isValidMultipartContentType(String contentType) {
+    return MULTIPART_FORM_DATA.regionMatches(true, 0, contentType, 0, MULTIPART_FORM_DATA.length())
+      || APPLICATION_X_WWW_FORM_URLENCODED.regionMatches(true, 0, contentType, 0, APPLICATION_X_WWW_FORM_URLENCODED.length());
+  }
+
+  public static boolean isValidMultipartMethod(HttpMethod method) {
+    return method.equals(HttpMethod.POST) || method.equals(HttpMethod.PUT) || method.equals(HttpMethod.PATCH)
+      || method.equals(HttpMethod.DELETE);
+  }
+
+  static void resolveFile(VertxInternal vertx, String filename, long offset, long length, Handler<AsyncResult<AsyncFile>> resultHandler) {
+    File file_ = vertx.resolveFile(filename);
+    if (!file_.exists()) {
+      resultHandler.handle(Future.failedFuture(new FileNotFoundException()));
+      return;
+    }
+
+    //We open the fileName using a RandomAccessFile to make sure that this is an actual file that can be read.
+    //i.e is not a directory
+    try(RandomAccessFile raf = new RandomAccessFile(file_, "r")) {
+      FileSystem fs = vertx.fileSystem();
+      fs.open(filename, new OpenOptions().setCreate(false).setWrite(false), ar -> {
+        if (ar.succeeded()) {
+          AsyncFile file = ar.result();
+          long contentLength = Math.min(length, file_.length() - offset);
+          file.setReadPos(offset);
+          file.setReadLength(contentLength);
+        }
+        resultHandler.handle(ar);
+      });
+    } catch (IOException e) {
+      resultHandler.handle(Future.failedFuture(e));
     }
   }
 }

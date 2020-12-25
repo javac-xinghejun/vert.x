@@ -107,6 +107,11 @@ public interface Cookie {
   Cookie setSecure(boolean secure);
 
   /**
+   * @return the security status of this cookie
+   */
+  boolean isSecure();
+
+  /**
    * Determines if this cookie is HTTP only.
    * If set to true, this cookie cannot be accessed by a client
    * side script. However, this works only if the browser supports it.
@@ -117,6 +122,26 @@ public interface Cookie {
    */
   @Fluent
   Cookie setHttpOnly(boolean httpOnly);
+
+  /**
+   * @return the http only status of this cookie
+   */
+  boolean isHttpOnly();
+
+  /**
+   * Sets the same site of this cookie.
+   *
+   * @param policy The policy should be one of {@link CookieSameSite}.
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  Cookie setSameSite(CookieSameSite policy);
+
+  /**
+   * @return the SameSite policy of this cookie
+   */
+  @Nullable
+  CookieSameSite getSameSite();
 
   /**
    * Encode the cookie to a string. This is what is used in the Set-Cookie header

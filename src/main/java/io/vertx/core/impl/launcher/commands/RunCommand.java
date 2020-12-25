@@ -226,7 +226,7 @@ public class RunCommand extends BareCommand {
    */
   @Override
   public boolean isClustered() {
-    return cluster || ha || (options != null && options.getEventBusOptions().isClustered());
+    return cluster || ha;
   }
 
   @Override
@@ -375,6 +375,11 @@ public class RunCommand extends BareCommand {
     if (classpath != null && !classpath.isEmpty()) {
       args.add("--classpath=" + classpath.stream().collect(Collectors.joining(File.pathSeparator)));
     }
+    if (vertxOptions != null) {
+      // Pass the configuration in 2 steps to quote correctly the options if it's an inlined json string
+      args.add("--options");
+      args.add(vertxOptions);
+    }
     if (config != null) {
       // Pass the configuration in 2 steps to quote correctly the configuration if it's an inlined json string
       args.add("--conf");
@@ -393,7 +398,7 @@ public class RunCommand extends BareCommand {
     // Enable stream redirection
     args.add("--redirect-output");
 
-    executionContext.execute("start", args.toArray(new String[args.size()]));
+    executionContext.execute("start", args.toArray(new String[0]));
     if (onCompletion != null) {
       onCompletion.handle(null);
     }

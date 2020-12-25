@@ -11,12 +11,13 @@
 
 package io.vertx.core.shareddata;
 
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Context;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
+import io.vertx.core.shareddata.impl.LockInternal;
 import io.vertx.test.core.VertxTestBase;
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -227,5 +228,42 @@ public class AsynchronousLockTest extends VertxTestBase {
     }));
     await();
     assertEquals(2, count.get());
+  }
+
+  @Test
+  public void testNoWorkerStarvation() {
+    waitFor(5);
+    getVertx().deployVerticle(() -> new AbstractVerticle() {
+      @Override
+      public void start() throws Exception {
+        vertx.sharedData().getLock("foo", onSuccess(lock -> {
+          vertx.setTimer(10, l -> {
+            lock.release();
+            complete();
+          });
+        }));
+      }
+    }, new DeploymentOptions().setInstances(5).setWorkerPoolName("bar").setWorkerPoolSize(1));
+    await();
+  }
+
+  @Test
+  public void evictTimedOutWaiters() {
+    int numWaiters = 10;
+    SharedData sharedData = vertx.sharedData();
+    sharedData.getLocalLock("foo", onSuccess(lock -> {
+      List<Future> locks = new ArrayList<>();
+      for (int i = 0;i < numWaiters;i++) {
+        locks.add(sharedData.getLocalLockWithTimeout("foo", 200));
+      }
+      LockInternal lockInternal = (LockInternal) lock;
+      assertEquals(numWaiters, lockInternal.waiters());
+      CompositeFuture.join(locks).onComplete(cf -> {
+        assertEquals(0, lockInternal.waiters());
+        lock.release();
+        testComplete();
+      });
+    }));
+    await();
   }
 }

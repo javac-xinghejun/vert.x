@@ -11,22 +11,24 @@
 
 package io.vertx.core.http.impl;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.*;
 import io.netty.handler.codec.DecoderResult;
 import io.netty.handler.codec.TooLongFrameException;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.stream.ChunkedFile;
 import io.netty.util.ReferenceCountUtil;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.VertxInternal;
+import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetSocket;
@@ -34,9 +36,11 @@ import io.vertx.core.net.impl.NetSocketImpl;
 import io.vertx.core.net.impl.SSLHelper;
 import io.vertx.core.net.impl.VertxHandler;
 import io.vertx.core.spi.metrics.HttpServerMetrics;
+import io.vertx.core.spi.tracing.SpanKind;
 import io.vertx.core.spi.tracing.VertxTracer;
+import io.vertx.core.tracing.TracingPolicy;
 
-import java.util.*;
+import java.util.function.Supplier;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.CONTINUE;
@@ -72,13 +76,13 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
   private static final Logger log = LoggerFactory.getLogger(Http1xServerConnection.class);
 
   private final String serverOrigin;
+  private final Supplier<ContextInternal> streamContextSupplier;
   private final SSLHelper sslHelper;
+  private final TracingPolicy tracingPolicy;
   private boolean requestFailed;
-  private long bytesRead;
-  private long bytesWritten;
 
-  private HttpServerRequestImpl requestInProgress;
-  private HttpServerRequestImpl responseInProgress;
+  private Http1xServerRequest requestInProgress;
+  private Http1xServerRequest responseInProgress;
   private boolean channelPaused;
   private Handler<HttpServerRequest> requestHandler;
 
@@ -86,19 +90,21 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
   final boolean handle100ContinueAutomatically;
   final HttpServerOptions options;
 
-  public Http1xServerConnection(VertxInternal vertx,
+  public Http1xServerConnection(Supplier<ContextInternal> streamContextSupplier,
                                 SSLHelper sslHelper,
                                 HttpServerOptions options,
-                                ChannelHandlerContext channel,
+                                ChannelHandlerContext chctx,
                                 ContextInternal context,
                                 String serverOrigin,
                                 HttpServerMetrics metrics) {
-    super(vertx, channel, context);
+    super(context, chctx);
     this.serverOrigin = serverOrigin;
+    this.streamContextSupplier = streamContextSupplier;
     this.options = options;
     this.sslHelper = sslHelper;
     this.metrics = metrics;
     this.handle100ContinueAutomatically = options.isHandle100ContinueAutomatically();
+    this.tracingPolicy = options.getTracingPolicy();
   }
 
   @Override
@@ -119,95 +125,105 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
         handleError(request);
         return;
       }
-      HttpServerRequestImpl req = new HttpServerRequestImpl(this, request);
-      synchronized (this) {
-        requestInProgress = req;
-        if (responseInProgress != null) {
-          // Deferred until the current response completion
-          responseInProgress.enqueue(req);
-          req.pause();
-          return;
-        }
-        responseInProgress = requestInProgress;
-        if (METRICS_ENABLED) {
-          req.reportRequestBegin();
-        }
-        req.handleBegin();
+      ContextInternal requestCtx = streamContextSupplier.get();
+      Http1xServerRequest req = new Http1xServerRequest(this, request, requestCtx);
+      requestInProgress = req;
+      if (responseInProgress != null) {
+        enqueueRequest(req);
+        return;
       }
-      ContextInternal ctx = req.context;
-      ContextInternal prev = ctx.beginDispatch();
-      try {
-        requestHandler.handle(req);
-      } catch (Throwable t) {
-        ctx.reportException(t);
-      } finally {
-        ctx.endDispatch(prev);
+      responseInProgress = requestInProgress;
+      if (METRICS_ENABLED) {
+        reportRequestBegin(req);
       }
+      req.handleBegin();
+      req.context.emit(req, requestHandler);
     } else if (msg == LastHttpContent.EMPTY_LAST_CONTENT) {
-      handleEnd();
-    } else if (msg instanceof HttpContent) {
-      handleContent(msg);
+      onEnd();
+    } else {
+      handleOther(msg);
+    }
+  }
+
+  private void enqueueRequest(Http1xServerRequest req) {
+    // Deferred until the current response completion
+    responseInProgress.enqueue(req);
+    req.pause();
+  }
+
+  private void handleOther(Object msg) {
+    if (msg instanceof HttpContent) {
+      onContent(msg);
     } else if (msg instanceof WebSocketFrame) {
+      // TODO
       handleWsFrame((WebSocketFrame) msg);
     }
   }
 
-  private void handleContent(Object msg) {
+  private void reportRequestBegin(Http1xServerRequest request) {
+    if (metrics != null) {
+      request.metric = metrics.requestBegin(metric(), request);
+    }
+    VertxTracer tracer = context.tracer();
+    if (tracer != null) {
+      request.trace = tracer.receiveRequest(request.context, SpanKind.RPC, tracingPolicy, request, request.method().name(), request.headers(), HttpUtils.SERVER_REQUEST_TAG_EXTRACTOR);
+    }
+  }
+
+  private void onContent(Object msg) {
     HttpContent content = (HttpContent) msg;
     if (content.decoderResult() != DecoderResult.SUCCESS) {
       handleError(content);
       return;
     }
     Buffer buffer = Buffer.buffer(VertxHandler.safeBuffer(content.content(), chctx.alloc()));
-    HttpServerRequestImpl request;
+    Http1xServerRequest request;
     synchronized (this) {
-      if (METRICS_ENABLED) {
-        reportBytesRead(buffer);
-      }
       request = requestInProgress;
     }
-    request.context.dispatch(v -> {
-      request.handleContent(buffer);
-    });
+    request.context.execute(buffer, request::handleContent);
     //TODO chunk trailers
     if (content instanceof LastHttpContent) {
-      handleEnd();
+      onEnd();
     }
   }
 
-  private void handleEnd() {
-    HttpServerRequestImpl request;
+  private void onEnd() {
+    Http1xServerRequest request;
     synchronized (this) {
-      if (METRICS_ENABLED) {
-        reportRequestComplete();
-      }
       request = requestInProgress;
       requestInProgress = null;
     }
-    request.context.dispatch(v -> {
-      request.handleEnd();
-    });
-  }
-
-  synchronized void responseComplete() {
     if (METRICS_ENABLED) {
-      reportResponseComplete();
+      reportRequestComplete(request);
     }
-    HttpServerRequestImpl request = responseInProgress;
-    responseInProgress = null;
-    HttpServerRequestImpl next = request.next();
-    if (next != null) {
-      // Handle pipelined request
-      handleNext(next);
+    request.context.execute(request, Http1xServerRequest::handleEnd);
+  }
+
+  void responseComplete() {
+    EventLoop eventLoop = context.nettyEventLoop();
+    if (eventLoop.inEventLoop()) {
+      if (METRICS_ENABLED) {
+        reportResponseComplete();
+      }
+      Http1xServerRequest request = responseInProgress;
+      responseInProgress = null;
+      Http1xServerRequest next = request.next();
+      if (next != null) {
+        // Handle pipelined request
+        handleNext(next);
+      }
+    } else {
+      eventLoop.execute(this::responseComplete);
     }
   }
 
-  private void handleNext(HttpServerRequestImpl next) {
+  private void handleNext(Http1xServerRequest next) {
     responseInProgress = next;
     next.handleBegin();
-    context.runOnContext(v -> {
-      next.resume();
-      requestHandler.handle(next);
+    context.emit(next, next_ -> {
+      next_.resume();
+      requestHandler.handle(next_);
     });
   }
 
@@ -227,44 +243,28 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
     }
   }
 
-  private void reportBytesRead(Buffer buffer) {
+  private void reportRequestComplete(Http1xServerRequest request) {
     if (metrics != null) {
-      bytesRead += buffer.length();
-    }
-  }
-
-  private void reportBytesWritten(Object msg) {
-    if (metrics != null) {
-      long bytes = getBytes(msg);
-      if (bytes == -1) {
-        log.warn("Metrics could not be updated to include bytes written because of unknown object " + msg.getClass() + " being written.");
-      } else {
-        bytesWritten += bytes;
-      }
-    }
-  }
-
-  private void reportRequestComplete() {
-    if (metrics != null) {
-      reportBytesRead(bytesRead);
-      bytesRead = 0;
+      metrics.requestEnd(request.metric(), request.bytesRead());
+      flushBytesRead();
     }
   }
 
   private void reportResponseComplete() {
+    Http1xServerRequest request = responseInProgress;
     if (metrics != null) {
-      reportBytesWritten(bytesWritten);
+      flushBytesWritten();
       if (requestFailed) {
-        metrics.requestReset(responseInProgress.metric());
+        metrics.requestReset(request.metric());
         requestFailed = false;
       } else {
-        metrics.responseEnd(responseInProgress.metric(), responseInProgress.response());
+        metrics.responseEnd(request.metric(), request.response().bytesWritten());
       }
-      bytesWritten = 0;
     }
     VertxTracer tracer = context.tracer();
-    if (tracer != null) {
-      tracer.sendResponse(responseInProgress.context, responseInProgress.response(), responseInProgress.trace(), null, HttpUtils.SERVER_RESPONSE_TAG_EXTRACTOR);
+    Object trace = request.trace();
+    if (tracer != null && trace != null) {
+      tracer.sendResponse(request.context, request.response(), trace, null, HttpUtils.SERVER_RESPONSE_TAG_EXTRACTOR);
     }
   }
 
@@ -276,50 +276,55 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
     return vertx;
   }
 
-  @Override
-  public void writeToChannel(Object msg, ChannelPromise promise) {
-    if (METRICS_ENABLED) {
-      reportBytesWritten(msg);
-    }
-    super.writeToChannel(msg, promise);
+  void createWebSocket(Http1xServerRequest request, PromiseInternal<ServerWebSocket> promise) {
+    context.execute(() -> {
+      if (request != responseInProgress) {
+        promise.fail("Invalid request");
+      } else if (webSocket != null) {
+        promise.complete(webSocket);
+      } else if (!(request.nettyRequest() instanceof FullHttpRequest)) {
+        promise.fail(new IllegalStateException());
+      } else {
+        WebSocketServerHandshaker handshaker;
+        try {
+          handshaker = createHandshaker(request);
+        } catch (WebSocketHandshakeException e) {
+          promise.fail(e);
+          return;
+        }
+        webSocket = new ServerWebSocketImpl(
+          promise.context(),
+          this,
+          handshaker.version() != WebSocketVersion.V00,
+          options.getWebSocketClosingTimeout(),
+          request,
+          handshaker,
+          options.getMaxWebSocketFrameSize(),
+          options.getMaxWebSocketMessageSize());
+        if (METRICS_ENABLED && metrics != null) {
+          webSocket.setMetric(metrics.connected(metric(), request.metric(), webSocket));
+        }
+        promise.complete(webSocket);
+      }
+    });
   }
 
-  ServerWebSocketImpl createWebSocket(HttpServerRequestImpl request) {
-    if (ws != null) {
-      return ws;
-    }
-    if (!(request.nettyRequest() instanceof FullHttpRequest)) {
-      throw new IllegalStateException();
-    }
-    WebSocketServerHandshaker handshaker = createHandshaker(request);
-    if (handshaker == null) {
-      return null;
-    }
-    ws = new ServerWebSocketImpl(vertx.getOrCreateContext(), this, handshaker.version() != WebSocketVersion.V00,
-      request, handshaker, options.getMaxWebsocketFrameSize(), options.getMaxWebsocketMessageSize());
-    if (METRICS_ENABLED && metrics != null) {
-      ws.setMetric(metrics.connected(metric(), request.metric(), ws));
-    }
-    return ws;
-  }
-
-  private WebSocketServerHandshaker createHandshaker(HttpServerRequestImpl request) {
+  private WebSocketServerHandshaker createHandshaker(Http1xServerRequest request) throws WebSocketHandshakeException {
     // As a fun part, Firefox 6.0.2 supports Websockets protocol '7'. But,
     // it doesn't send a normal 'Connection: Upgrade' header. Instead it
     // sends: 'Connection: keep-alive, Upgrade'. Brilliant.
-    Channel ch = channel();
     String connectionHeader = request.getHeader(io.vertx.core.http.HttpHeaders.CONNECTION);
     if (connectionHeader == null || !connectionHeader.toLowerCase().contains("upgrade")) {
       request.response()
         .setStatusCode(BAD_REQUEST.code())
         .end("\"Connection\" header must be \"Upgrade\".");
-      return null;
+      throw new WebSocketHandshakeException("Invalid connection header");
     }
     if (request.method() != io.vertx.core.http.HttpMethod.GET) {
       request.response()
         .setStatusCode(METHOD_NOT_ALLOWED.code())
         .end();
-      return null;
+      throw new WebSocketHandshakeException("Invalid HTTP method");
     }
     String wsURL;
     try {
@@ -328,82 +333,111 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
       request.response()
         .setStatusCode(BAD_REQUEST.code())
         .end("Invalid request URI");
-      return null;
+      throw new WebSocketHandshakeException("Invalid WebSocket location", e);
     }
-
-    WebSocketServerHandshakerFactory factory =
-      new WebSocketServerHandshakerFactory(wsURL,
-        options.getWebsocketSubProtocols(),
-        options.getPerMessageWebsocketCompressionSupported() || options.getPerFrameWebsocketCompressionSupported(),
-        options.getMaxWebsocketFrameSize(), options.isAcceptUnmaskedFrames());
+    String subProtocols = null;
+    if (options.getWebSocketSubProtocols() != null) {
+      subProtocols = String.join(",", options.getWebSocketSubProtocols());
+    }
+    WebSocketDecoderConfig config = WebSocketDecoderConfig.newBuilder()
+      .allowExtensions(options.getPerMessageWebSocketCompressionSupported() || options.getPerFrameWebSocketCompressionSupported())
+      .maxFramePayloadLength(options.getMaxWebSocketFrameSize())
+      .allowMaskMismatch(options.isAcceptUnmaskedFrames())
+      .closeOnProtocolViolation(false)
+      .build();
+    WebSocketServerHandshakerFactory factory = new WebSocketServerHandshakerFactory(wsURL, subProtocols, config);
     WebSocketServerHandshaker shake = factory.newHandshaker(request.nettyRequest());
-    if (shake == null) {
-      // See WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ch);
-      request.response()
-        .putHeader(HttpHeaderNames.SEC_WEBSOCKET_VERSION, WebSocketVersion.V13.toHttpHeaderValue())
-        .setStatusCode(UPGRADE_REQUIRED.code())
-        .end();
+    if (shake != null) {
+      return shake;
     }
-    return shake;
+    // See WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ch);
+    request.response()
+      .putHeader(HttpHeaderNames.SEC_WEBSOCKET_VERSION, WebSocketVersion.V13.toHttpHeaderValue())
+      .setStatusCode(UPGRADE_REQUIRED.code())
+      .end();
+    throw new WebSocketHandshakeException("Invalid WebSocket version");
   }
 
-  NetSocket createNetSocket() {
+  public void netSocket(Handler<AsyncResult<NetSocket>> handler) {
+    Future<NetSocket> fut = netSocket();
+    if (handler != null) {
+      fut.onComplete(handler);
+    }
+  }
 
-    Map<Channel, NetSocketImpl> connectionMap = new HashMap<>(1);
+  public Future<NetSocket> netSocket() {
+    Promise<NetSocket> promise = context.promise();
+    netSocket(promise);
+    return promise.future();
+  }
 
-    NetSocketImpl socket = new NetSocketImpl(vertx, chctx, context, sslHelper, metrics) {
-      @Override
-      protected void handleClosed() {
-        if (metrics != null) {
-          metrics.responseEnd(responseInProgress.metric(), responseInProgress.response());
-        }
-        connectionMap.remove(chctx.channel());
-        super.handleClosed();
+  void netSocket(Promise<NetSocket> promise) {
+    context.execute(() -> {
+
+      // Flush out all pending data
+      flush();
+
+      // remove old http handlers and replace the old handler with one that handle plain sockets
+      ChannelPipeline pipeline = chctx.pipeline();
+      ChannelHandler compressor = pipeline.get(HttpChunkContentCompressor.class);
+      if (compressor != null) {
+        pipeline.remove(compressor);
       }
 
-      @Override
-      public synchronized void handleMessage(Object msg) {
-        if (msg instanceof HttpContent) {
-          ReferenceCountUtil.release(msg);
-          return;
-        }
-        super.handleMessage(msg);
+      pipeline.remove("httpDecoder");
+      if (pipeline.get("chunkedWriter") != null) {
+        pipeline.remove("chunkedWriter");
       }
-    };
-    socket.metric(metric());
-    connectionMap.put(chctx.channel(), socket);
 
-    // Flush out all pending data
-    flush();
+      pipeline.replace("handler", "handler", VertxHandler.create(ctx -> {
+        NetSocketImpl socket = new NetSocketImpl(context, ctx, sslHelper, metrics) {
+          @Override
+          protected void handleClosed() {
+            if (metrics != null) {
+              Http1xServerRequest request = Http1xServerConnection.this.responseInProgress;
+              metrics.responseEnd(request.metric(), request.response().bytesWritten());
+            }
+            super.handleClosed();
+          }
+          @Override
+          public synchronized void handleMessage(Object msg) {
+            if (msg instanceof HttpContent) {
+              ReferenceCountUtil.release(msg);
+              return;
+            }
+            super.handleMessage(msg);
+          }
+        };
+        socket.metric(metric());
+        return socket;
+      }));
 
-    // remove old http handlers and replace the old handler with one that handle plain sockets
-    ChannelPipeline pipeline = chctx.pipeline();
-    ChannelHandler compressor = pipeline.get(HttpChunkContentCompressor.class);
-    if (compressor != null) {
-      pipeline.remove(compressor);
-    }
+      // check if the encoder can be removed yet or not.
+      pipeline.remove("httpEncoder");
 
-    pipeline.remove("httpDecoder");
-    if (pipeline.get("chunkedWriter") != null) {
-      pipeline.remove("chunkedWriter");
-    }
-
-    chctx.pipeline().replace("handler", "handler", VertxHandler.create(socket));
-
-    // check if the encoder can be removed yet or not.
-    chctx.pipeline().remove("httpEncoder");
-    return socket;
+      //
+      VertxHandler<NetSocketImpl> handler = (VertxHandler<NetSocketImpl>) pipeline.get("handler");
+      promise.complete(handler.getConnection());
+    });
   }
 
   @Override
-  public synchronized void handleInterestedOpsChanged() {
-    if (!isNotWritable()) {
+  public void handleInterestedOpsChanged() {
+    ContextInternal context;
+    Handler<Boolean> handler;
+    synchronized (this) {
       if (responseInProgress != null) {
-        responseInProgress.context.dispatch(v -> responseInProgress.response().handleDrained());
-      } else if (ws != null) {
-        ws.handleDrained();
+        context = responseInProgress.context;
+        handler = responseInProgress.response()::handleWritabilityChanged;
+      } else if (webSocket != null) {
+        context = webSocket.context;
+        handler = webSocket::handleWritabilityChanged;
+      } else {
+        return;
       }
     }
+    boolean writable = !isNotWritable();
+    context.execute(writable, handler);
   }
 
   void write100Continue() {
@@ -411,30 +445,26 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
   }
 
   protected void handleClosed() {
-    HttpServerRequestImpl responseInProgress;
-    HttpServerRequestImpl requestInProgress;
+    Http1xServerRequest responseInProgress;
+    Http1xServerRequest requestInProgress;
     ServerWebSocketImpl ws;
     synchronized (this) {
-      ws = this.ws;
+      ws = this.webSocket;
       requestInProgress = this.requestInProgress;
       responseInProgress = this.responseInProgress;
-      if (METRICS_ENABLED && metrics != null && ws != null) {
-        metrics.disconnected(ws.getMetric());
-        ws.setMetric(null);
-      }
     }
     if (requestInProgress != null) {
-      requestInProgress.context.dispatch(v -> {
+      requestInProgress.context.execute(v -> {
         requestInProgress.handleException(CLOSED_EXCEPTION);
       });
     }
     if (responseInProgress != null && responseInProgress != requestInProgress) {
-      responseInProgress.context.dispatch(v -> {
+      responseInProgress.context.execute(v -> {
         responseInProgress.handleException(CLOSED_EXCEPTION);
       });
     }
     if (ws != null) {
-      ws.context.dispatch(v -> ws.handleClosed());
+      ws.context.execute(v -> ws.handleConnectionClosed());
     }
     super.handleClosed();
   }
@@ -442,11 +472,11 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
   @Override
   protected void handleException(Throwable t) {
     super.handleException(t);
-    HttpServerRequestImpl responseInProgress;
-    HttpServerRequestImpl requestInProgress;
+    Http1xServerRequest responseInProgress;
+    Http1xServerRequest requestInProgress;
     ServerWebSocketImpl ws;
     synchronized (this) {
-      ws = this.ws;
+      ws = this.webSocket;
       requestInProgress = this.requestInProgress;
       responseInProgress = this.responseInProgress;
       if (METRICS_ENABLED && metrics != null) {
@@ -460,7 +490,7 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
       responseInProgress.handleException(t);
     }
     if (ws != null) {
-      ws.context.dispatch(v -> ws.handleException(t));
+      ws.context.execute(v -> ws.handleException(t));
     }
   }
 
@@ -482,36 +512,26 @@ public class Http1xServerConnection extends Http1xConnectionBase<ServerWebSocket
       } else {
         version = HttpVersion.HTTP_1_1;
       }
-      HttpResponseStatus status = causeMsg.startsWith("An HTTP line is larger than") ? HttpResponseStatus.REQUEST_URI_TOO_LONG : HttpResponseStatus.BAD_REQUEST;
+      HttpResponseStatus status;
+      if (causeMsg.startsWith("An HTTP line is larger than")) {
+        status = HttpResponseStatus.REQUEST_URI_TOO_LONG;
+      } else if (causeMsg.startsWith("HTTP header is larger than")) {
+        status = HttpResponseStatus.REQUEST_HEADER_FIELDS_TOO_LARGE;
+      } else {
+        status = HttpResponseStatus.BAD_REQUEST;
+      }
       DefaultFullHttpResponse resp = new DefaultFullHttpResponse(version, status);
       ChannelPromise fut = chctx.newPromise();
       writeToChannel(resp, fut);
       fut.addListener(res -> {
+        // fail(result.cause());
+        // because of CCE
         fail(result.cause());
       });
     } else {
+      // fail(result.cause());
+      // because of CCE
       fail(result.cause());
-    }
-  }
-
-  private long getBytes(Object obj) {
-    if (obj == null) return 0;
-
-    if (obj instanceof Buffer) {
-      return ((Buffer) obj).length();
-    } else if (obj instanceof ByteBuf) {
-      return ((ByteBuf) obj).readableBytes();
-    } else if (obj instanceof HttpContent) {
-      return ((HttpContent) obj).content().readableBytes();
-    } else if (obj instanceof WebSocketFrame) {
-      return ((WebSocketFrame) obj).content().readableBytes();
-    } else if (obj instanceof FileRegion) {
-      return ((FileRegion) obj).count();
-    } else if (obj instanceof ChunkedFile) {
-      ChunkedFile file = (ChunkedFile) obj;
-      return file.endOffset() - file.startOffset();
-    } else {
-      return -1;
     }
   }
 }

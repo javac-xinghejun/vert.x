@@ -11,19 +11,20 @@
 
 package io.vertx.core.eventbus.impl.clustered;
 
-import io.vertx.core.Vertx;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.EventBusOptions;
 import io.vertx.core.eventbus.impl.OutboundDeliveryContext;
 import io.vertx.core.eventbus.impl.codecs.PingMessageCodec;
+import io.vertx.core.impl.CloseFuture;
+import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetClient;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.impl.ConnectionBase;
-import io.vertx.core.net.impl.NetClientImpl;
-import io.vertx.core.net.impl.ServerID;
+import io.vertx.core.spi.cluster.NodeInfo;
 import io.vertx.core.spi.metrics.EventBusMetrics;
 
 import java.util.ArrayDeque;
@@ -39,46 +40,58 @@ class ConnectionHolder {
   private static final String PING_ADDRESS = "__vertx_ping";
 
   private final ClusteredEventBus eventBus;
-  private final NetClient client;
-  private final ServerID serverID;
-  private final Vertx vertx;
+  private final String remoteNodeId;
+  private final VertxInternal vertx;
   private final EventBusMetrics metrics;
+  private final EventBusOptions busOptions;
+  private final CloseFuture clientCloseFuture;
 
+  private NetClient client;
   private Queue<OutboundDeliveryContext<?>> pending;
   private NetSocket socket;
   private boolean connected;
   private long timeoutID = -1;
   private long pingTimeoutID = -1;
 
-  ConnectionHolder(ClusteredEventBus eventBus, ServerID serverID, EventBusOptions options) {
+  ConnectionHolder(ClusteredEventBus eventBus, String remoteNodeId, EventBusOptions options) {
     this.eventBus = eventBus;
-    this.serverID = serverID;
+    this.busOptions = options;
+    this.remoteNodeId = remoteNodeId;
     this.vertx = eventBus.vertx();
     this.metrics = eventBus.getMetrics();
-    NetClientOptions clientOptions = new NetClientOptions(options.toJson());
-    ClusteredEventBus.setCertOptions(clientOptions, options.getKeyCertOptions());
-    ClusteredEventBus.setTrustOptions(clientOptions, options.getTrustOptions());
-    client = new NetClientImpl(eventBus.vertx(), clientOptions, false);
+    this.clientCloseFuture = new CloseFuture();
   }
 
-  synchronized void connect() {
-    if (connected) {
-      throw new IllegalStateException("Already connected");
-    }
-    client.connect(serverID.port, serverID.host, res -> {
-      if (res.succeeded()) {
-        connected(res.result());
-      } else {
-        log.warn("Connecting to server " + serverID + " failed", res.cause());
-        close(res.cause());
+  private NetClientOptions getClientOptions(EventBusOptions options) {
+    return new NetClientOptions(options.toJson());
+  }
+
+  void connect() {
+    synchronized (this) {
+      if (client != null) {
+        return;
       }
-    });
+      NetClientOptions clientOptions = getClientOptions(busOptions);
+      client = vertx.createNetClient(clientOptions, clientCloseFuture);
+    }
+    Promise<NodeInfo> promise = Promise.promise();
+    eventBus.vertx().getClusterManager().getNodeInfo(remoteNodeId, promise);
+    promise.future()
+      .flatMap(info -> client.connect(info.port(), info.host()))
+      .onComplete(ar -> {
+        if (ar.succeeded()) {
+          connected(ar.result());
+        } else {
+          log.warn("Connecting to server " + remoteNodeId + " failed", ar.cause());
+          close(ar.cause());
+        }
+      });
   }
 
   // TODO optimise this (contention on monitor)
   synchronized void writeMessage(OutboundDeliveryContext<?> ctx) {
     if (connected) {
-      Buffer data = ((ClusteredMessage)ctx.message).encodeToWire();
+      Buffer data = ((ClusteredMessage) ctx.message).encodeToWire();
       if (metrics != null) {
         metrics.messageWritten(ctx.message.address(), data.length());
       }
@@ -86,7 +99,7 @@ class ConnectionHolder {
     } else {
       if (pending == null) {
         if (log.isDebugEnabled()) {
-          log.debug("Not connected to server " + serverID + " - starting queuing");
+          log.debug("Not connected to server " + remoteNodeId + " - starting queuing");
         }
         pending = new ArrayDeque<>();
       }
@@ -113,15 +126,12 @@ class ConnectionHolder {
         }
       }
     }
-    try {
-      client.close();
-    } catch (Exception ignore) {
-    }
-    // The holder can be null or different if the target server is restarted with same serverid
+    clientCloseFuture.close(Promise.promise());
+    // The holder can be null or different if the target server is restarted with same nodeInfo
     // before the cleanup for the previous one has been processed
-    if (eventBus.connections().remove(serverID, this)) {
+    if (eventBus.connections().remove(remoteNodeId, this)) {
       if (log.isDebugEnabled()) {
-        log.debug("Cluster connection closed for server " + serverID);
+        log.debug("Cluster connection closed for server " + remoteNodeId);
       }
     }
   }
@@ -132,11 +142,11 @@ class ConnectionHolder {
       // If we don't get a pong back in time we close the connection
       timeoutID = vertx.setTimer(options.getClusterPingReplyInterval(), id2 -> {
         // Didn't get pong in time - consider connection dead
-        log.warn("No pong from server " + serverID + " - will consider it dead");
+        log.warn("No pong from server " + remoteNodeId + " - will consider it dead");
         close();
       });
       ClusteredMessage pingMessage =
-        new ClusteredMessage<>(serverID, PING_ADDRESS, null, null, new PingMessageCodec(), true, eventBus);
+        new ClusteredMessage<>(remoteNodeId, PING_ADDRESS, null, null, new PingMessageCodec(), true, eventBus);
       Buffer data = pingMessage.encodeToWire();
       socket.write(data);
     });
@@ -158,7 +168,7 @@ class ConnectionHolder {
     schedulePing();
     if (pending != null) {
       if (log.isDebugEnabled()) {
-        log.debug("Draining the queue for server " + serverID);
+        log.debug("Draining the queue for server " + remoteNodeId);
       }
       for (OutboundDeliveryContext<?> ctx : pending) {
         Buffer data = ((ClusteredMessage<?, ?>)ctx.message).encodeToWire();
