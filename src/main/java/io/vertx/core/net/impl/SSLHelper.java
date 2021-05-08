@@ -18,7 +18,6 @@ import io.vertx.core.VertxException;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ClientAuth;
 import io.vertx.core.http.HttpClientOptions;
-import io.vertx.core.http.HttpVersion;
 import io.vertx.core.impl.VertxInternal;
 import io.vertx.core.impl.logging.Logger;
 import io.vertx.core.impl.logging.LoggerFactory;
@@ -97,14 +96,6 @@ public class SSLHelper {
     return engineOptions;
   }
 
-  private static final Map<HttpVersion, String> PROTOCOL_NAME_MAPPING = new EnumMap<>(HttpVersion.class);
-
-  static {
-    PROTOCOL_NAME_MAPPING.put(HttpVersion.HTTP_2, "h2");
-    PROTOCOL_NAME_MAPPING.put(HttpVersion.HTTP_1_1, "http/1.1");
-    PROTOCOL_NAME_MAPPING.put(HttpVersion.HTTP_1_0, "http/1.0");
-  }
-
   private static final Logger log = LoggerFactory.getLogger(SSLHelper.class);
 
   private boolean ssl;
@@ -121,13 +112,15 @@ public class SSLHelper {
   private boolean openSsl;
   private boolean client;
   private boolean useAlpn;
-  private List<HttpVersion> applicationProtocols;
+  private List<String> applicationProtocols;
   private Set<String> enabledProtocols;
 
   private String endpointIdentificationAlgorithm = "";
 
-  private SslContext sslContext;
-  private Map<Certificate, SslContext> sslContextMap = new ConcurrentHashMap<>();
+  private SslContext[] sslContexts = new SslContext[2];
+  private Map<Certificate, SslContext>[] sslContextMaps = new Map[] {
+    new ConcurrentHashMap<>(), new ConcurrentHashMap<>()
+  };
   private boolean openSslSessionCacheEnabled = true;
 
   private SSLHelper(TCPSSLOptions options, KeyCertOptions keyCertOptions, TrustOptions trustOptions) {
@@ -154,9 +147,6 @@ public class SSLHelper {
 
   public SSLHelper(HttpClientOptions options, KeyCertOptions keyCertOptions, TrustOptions trustOptions) {
     this((ClientOptionsBase) options, keyCertOptions, trustOptions);
-    if (options.isVerifyHost()) {
-      this.endpointIdentificationAlgorithm = "HTTPS";
-    }
   }
 
   public SSLHelper(NetClientOptions options, KeyCertOptions keyCertOptions, TrustOptions trustOptions) {
@@ -224,11 +214,11 @@ public class SSLHelper {
     return clientAuth;
   }
 
-  public List<HttpVersion> getApplicationProtocols() {
+  public List<String> getApplicationProtocols() {
     return applicationProtocols;
   }
 
-  public SSLHelper setApplicationProtocols(List<HttpVersion> applicationProtocols) {
+  public SSLHelper setApplicationProtocols(List<String> applicationProtocols) {
     this.applicationProtocols = applicationProtocols;
     return this;
   }
@@ -241,7 +231,7 @@ public class SSLHelper {
     If you don't specify a key store, and don't specify a system property no key store will be used
     You can override this by specifying the javax.echo.ssl.keyStore system property
      */
-  private SslContext createContext(VertxInternal vertx, X509KeyManager mgr, TrustManagerFactory trustMgrFactory) {
+  private SslContext createContext(VertxInternal vertx, boolean useAlpn, X509KeyManager mgr, TrustManagerFactory trustMgrFactory) {
     try {
       SslContextBuilder builder;
       if (client) {
@@ -284,7 +274,7 @@ public class SSLHelper {
             ApplicationProtocolConfig.Protocol.ALPN,
             ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
             ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-            applicationProtocols.stream().map(PROTOCOL_NAME_MAPPING::get).collect(Collectors.toList())
+            applicationProtocols
         ));
       }
       SslContext ctx = builder.build();
@@ -463,17 +453,22 @@ public class SSLHelper {
   }
 
   public SslContext getContext(VertxInternal vertx, String serverName) {
+    return getContext(vertx, serverName, useAlpn);
+  }
+
+  public SslContext getContext(VertxInternal vertx, String serverName, boolean useAlpn) {
+    int idx = useAlpn ? 0 : 1;
     if (serverName == null) {
-      if (sslContext == null) {
-        TrustManagerFactory trustMgrFactory = null;
+      if (sslContexts[idx] == null) {
+        TrustManagerFactory trustMgrFactory;
         try {
           trustMgrFactory = getTrustMgrFactory(vertx, null);
         } catch (Exception e) {
           throw new VertxException(e);
         }
-        sslContext = createContext(vertx, null, trustMgrFactory);
+        sslContexts[idx] = createContext(vertx, useAlpn, null, trustMgrFactory);
       }
-      return sslContext;
+      return sslContexts[idx];
     } else {
       X509KeyManager mgr;
       try {
@@ -482,11 +477,11 @@ public class SSLHelper {
         throw new RuntimeException(e);
       }
       if (mgr == null) {
-        return sslContext;
+        return sslContexts[idx];
       }
       try {
         TrustManagerFactory trustMgrFactory = getTrustMgrFactory(vertx, serverName);
-        return sslContextMap.computeIfAbsent(mgr.getCertificateChain(null)[0], s -> createContext(vertx, mgr, trustMgrFactory));
+        return sslContextMaps[idx].computeIfAbsent(mgr.getCertificateChain(null)[0], s -> createContext(vertx, useAlpn, mgr, trustMgrFactory));
       } catch (Exception e) {
         throw new VertxException(e);
       }
@@ -506,8 +501,8 @@ public class SSLHelper {
     return engine;
   }
 
-  public SSLEngine createEngine(VertxInternal vertx, SocketAddress socketAddress, String serverName) {
-    SslContext context = getContext(vertx, null);
+  public SSLEngine createEngine(VertxInternal vertx, SocketAddress socketAddress, String serverName, boolean useAlpn) {
+    SslContext context = getContext(vertx, null, useAlpn);
     SSLEngine engine;
     if (socketAddress.isDomainSocket()) {
       engine = context.newEngine(ByteBufAllocator.DEFAULT);

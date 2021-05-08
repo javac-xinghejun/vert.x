@@ -17,6 +17,7 @@ import io.vertx.core.shareddata.impl.ClusterSerializable;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static io.vertx.core.json.impl.JsonUtil.*;
@@ -306,9 +307,10 @@ public class JsonArray implements Iterable<Object>, ClusterSerializable, Shareab
   /**
    * Get the Instant at position {@code pos} in the array.
    *
-   * JSON itself has no notion of a temporal types, this extension complies to the RFC-7493, so this method assumes
-   * there is a String value and it contains an ISO 8601 encoded date and time format such as "2017-04-03T10:25:41Z",
-   * which it decodes if found and returns.
+   * JSON itself has no notion of a temporal types, this extension allows ISO 8601 string formatted dates with timezone
+   * always set to zero UTC offset, as denoted by the suffix "Z" to be parsed as a instant value.
+   * {@code YYYY-MM-DDTHH:mm:ss.sssZ} is the default format used by web browser scripting. This extension complies to
+   * the RFC-7493 with all the restrictions mentioned before. The method will then decode and return a instant value.
    *
    * @param pos the position in the array
    * @return the Instant, or null if a null value present
@@ -556,23 +558,45 @@ public class JsonArray implements Iterable<Object>, ClusterSerializable, Shareab
    * Deep copy of the JSON array.
    *
    * @return a copy where all elements have been copied recursively
+   * @throws IllegalStateException when a nested element cannot be copied
    */
   @Override
   public JsonArray copy() {
+    return copy(DEFAULT_CLONER);
+  }
+
+  /**
+   * Deep copy of the JSON array.
+   *
+   * <p> Unlike {@link #copy()} that can fail when an unknown element cannot be copied, this method
+   * delegates the copy of such element to the {@code cloner} function and will not fail.
+   *
+   * @param cloner a function that copies custom values not supported by the JSON implementation
+   * @return a copy where all elements have been copied recursively
+   */
+  public JsonArray copy(Function<Object, ?> cloner) {
     List<Object> copiedList = new ArrayList<>(list.size());
     for (Object val : list) {
-      copiedList.add(checkAndCopy(val));
+      copiedList.add(deepCopy(val, cloner));
     }
     return new JsonArray(copiedList);
   }
 
   /**
-   * Get a Stream over the entries in the JSON array
+   * Get a Stream over the entries in the JSON array. The values in the stream will follow
+   * the same rules as defined in {@link #getValue(int)}, respecting the JSON requirements.
+   *
+   * To stream the raw values, use the storage object stream instead:
+   * <pre>{@code
+   *   jsonArray
+   *     .getList()
+   *     .stream()
+   * }</pre>
    *
    * @return a Stream
    */
   public Stream<Object> stream() {
-    return JsonObject.asStream(iterator());
+    return asStream(iterator());
   }
 
   @Override

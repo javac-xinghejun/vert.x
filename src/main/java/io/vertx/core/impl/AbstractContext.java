@@ -158,12 +158,14 @@ abstract class AbstractContext implements ContextInternal {
   @Override
   public <T> PromiseInternal<T> promise(Handler<AsyncResult<T>> handler) {
     if (handler instanceof PromiseInternal) {
-      return (PromiseInternal<T>) handler;
-    } else {
-      PromiseInternal<T> promise = promise();
-      promise.future().onComplete(handler);
-      return promise;
+      PromiseInternal<T> promise = (PromiseInternal<T>) handler;
+      if (promise.context() != null) {
+        return promise;
+      }
     }
+    PromiseInternal<T> promise = promise();
+    promise.future().onComplete(handler);
+    return promise;
   }
 
   @Override
@@ -217,8 +219,6 @@ abstract class AbstractContext implements ContextInternal {
   public final boolean removeLocal(String key) {
     return localContextData().remove(key) != null;
   }
-
-  public abstract CloseHooks closeHooks();
 
   private static <T> void setResultHandler(ContextInternal ctx, Future<T> fut, Handler<AsyncResult<T>> resultHandler) {
     if (resultHandler != null) {

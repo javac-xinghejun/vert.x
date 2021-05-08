@@ -35,6 +35,7 @@ import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.NetClient;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
+import io.vertx.core.net.ProxyOptions;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.core.spi.metrics.Metrics;
 import io.vertx.core.spi.metrics.MetricsProvider;
@@ -69,19 +70,21 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
     this.vertx = vertx;
     this.channelGroup = new DefaultChannelGroup(vertx.getAcceptorEventLoopGroup().next());
     this.options = new NetClientOptions(options);
-    this.sslHelper = new SSLHelper(options, options.getKeyCertOptions(), options.getTrustOptions());
+    this.sslHelper = new SSLHelper(options, options.getKeyCertOptions(), options.getTrustOptions()).setApplicationProtocols(options.getApplicationLayerProtocols());
     this.metrics = vertx.metricsSPI() != null ? vertx.metricsSPI().createNetClientMetrics(options) : null;
     this.logEnabled = options.getLogActivity();
     this.idleTimeout = options.getIdleTimeout();
     this.idleTimeoutUnit = options.getIdleTimeoutUnit();
     this.closeFuture = closeFuture;
+
+    sslHelper.validate(vertx);
   }
 
   protected void initChannel(ChannelPipeline pipeline) {
     if (logEnabled) {
       pipeline.addLast("logging", new LoggingHandler());
     }
-    if (sslHelper.isSSL()) {
+    if (options.isSsl()) {
       // only add ChunkedWriteHandler when SSL is enabled otherwise it is not needed as FileRegion is used.
       pipeline.addLast("chunkedWriter", new ChunkedWriteHandler());       // For large file / sendfile support
     }
@@ -107,9 +110,12 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
 
   @Override
   public Future<NetSocket> connect(SocketAddress remoteAddress, String serverName) {
-    ContextInternal ctx = vertx.getOrCreateContext();
-    Promise<NetSocket> promise = ctx.promise();
-    doConnect(remoteAddress, serverName, promise, ctx);
+    return connect(vertx.getOrCreateContext(), remoteAddress, serverName);
+  }
+
+  public Future<NetSocket> connect(ContextInternal context, SocketAddress remoteAddress, String serverName) {
+    Promise<NetSocket> promise = context.promise();
+    connect(remoteAddress, serverName, promise, context);
     return promise.future();
   }
 
@@ -167,17 +173,13 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
     }
   }
 
-  private void applyConnectionOptions(boolean domainSocket, Bootstrap bootstrap) {
-    vertx.transport().configure(options, domainSocket, bootstrap);
-  }
-
   @Override
   public NetClient connect(SocketAddress remoteAddress, String serverName, Handler<AsyncResult<NetSocket>> connectHandler) {
     Objects.requireNonNull(connectHandler, "No null connectHandler accepted");
     ContextInternal ctx = vertx.getOrCreateContext();
     Promise<NetSocket> promise = ctx.promise();
     promise.future().onComplete(connectHandler);
-    doConnect(remoteAddress, serverName, promise, ctx);
+    connect(remoteAddress, serverName, promise, ctx);
     return this;
   }
 
@@ -186,32 +188,39 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
     return connect(remoteAddress, null, connectHandler);
   }
 
-  private void doConnect(SocketAddress remoteAddress, String serverName, Promise<NetSocket> connectHandler, ContextInternal ctx) {
-    doConnect(remoteAddress, serverName, connectHandler, ctx, options.getReconnectAttempts());
-  }
-
-  private void doConnect(SocketAddress remoteAddress, String serverName, Promise<NetSocket> connectHandler, ContextInternal context, int remainingAttempts) {
-    checkClosed();
-    Objects.requireNonNull(connectHandler, "No null connectHandler accepted");
-    sslHelper.validate(vertx);
-    Bootstrap bootstrap = new Bootstrap();
-    bootstrap.group(context.nettyEventLoop());
-
-    applyConnectionOptions(remoteAddress.isDomainSocket(), bootstrap);
-
-    ChannelProvider channelProvider = new ChannelProvider(bootstrap, sslHelper, context, options.getProxyOptions());
-
+  private void connect(SocketAddress remoteAddress, String serverName, Promise<NetSocket> connectHandler, ContextInternal ctx) {
     SocketAddress peerAddress = remoteAddress;
     String peerHost = peerAddress.host();
     if (peerHost != null && peerHost.endsWith(".")) {
       peerAddress = SocketAddress.inetSocketAddress(peerAddress.port(), peerHost.substring(0, peerHost.length() - 1));
     }
-    io.netty.util.concurrent.Future<Channel> fut = channelProvider.connect(remoteAddress, peerAddress, serverName, sslHelper.isSSL());
+    connectInternal(options.getProxyOptions(), remoteAddress, peerAddress, serverName, options.isSsl(), options.isUseAlpn(), connectHandler, ctx, options.getReconnectAttempts());
+  }
+
+  public void connectInternal(ProxyOptions proxyOptions,
+                              SocketAddress remoteAddress,
+                              SocketAddress peerAddress,
+                              String serverName,
+                              boolean ssl,
+                              boolean useAlpn,
+                              Promise<NetSocket> connectHandler,
+                              ContextInternal context,
+                              int remainingAttempts) {
+    checkClosed();
+    Objects.requireNonNull(connectHandler, "No null connectHandler accepted");
+    Bootstrap bootstrap = new Bootstrap();
+    bootstrap.group(context.nettyEventLoop());
+
+    vertx.transport().configure(options, remoteAddress.isDomainSocket(), bootstrap);
+
+    ChannelProvider channelProvider = new ChannelProvider(bootstrap, sslHelper, context)
+      .proxyOptions(proxyOptions);
+
+    channelProvider.handler(ch -> connected(context, ch, connectHandler, remoteAddress, channelProvider.applicationProtocol()));
+
+    io.netty.util.concurrent.Future<Channel> fut = channelProvider.connect(remoteAddress, peerAddress, serverName, ssl, useAlpn);
     fut.addListener((GenericFutureListener<io.netty.util.concurrent.Future<Channel>>) future -> {
-      if (future.isSuccess()) {
-        Channel ch = future.getNow();
-        connected(context, ch, connectHandler, remoteAddress);
-      } else {
+      if (!future.isSuccess()) {
         Throwable cause = future.cause();
         // FileNotFoundException for domain sockets
         boolean connectError = cause instanceof ConnectException || cause instanceof FileNotFoundException;
@@ -220,7 +229,7 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
             log.debug("Failed to create connection. Will retry in " + options.getReconnectInterval() + " milliseconds");
             //Set a timer to retry connection
             vertx.setTimer(options.getReconnectInterval(), tid ->
-              doConnect(remoteAddress, serverName, connectHandler, context, remainingAttempts == -1 ? remainingAttempts : remainingAttempts - 1)
+              connectInternal(proxyOptions, remoteAddress, peerAddress, serverName, ssl, useAlpn, connectHandler, context, remainingAttempts == -1 ? remainingAttempts : remainingAttempts - 1)
             );
           });
         } else {
@@ -230,10 +239,11 @@ public class NetClientImpl implements MetricsProvider, NetClient, Closeable {
     });
   }
 
-  private void connected(ContextInternal context, Channel ch, Promise<NetSocket> connectHandler, SocketAddress remoteAddress) {
+  private void connected(ContextInternal context, Channel ch, Promise<NetSocket> connectHandler, SocketAddress remoteAddress, String applicationLayerProtocol) {
     channelGroup.add(ch);
     initChannel(ch.pipeline());
-    VertxHandler<NetSocketImpl> handler = VertxHandler.create(ctx -> new NetSocketImpl(context, ctx, remoteAddress, sslHelper, metrics));
+    VertxHandler<NetSocketImpl> handler = VertxHandler.create(ctx -> new NetSocketImpl(context, ctx, remoteAddress, sslHelper, metrics, applicationLayerProtocol));
+    handler.removeHandler(NetSocketImpl::unregisterEventBusHandler);
     handler.addHandler(sock -> {
       if (metrics != null) {
         sock.metric(metrics.connected(sock.remoteAddress(), sock.remoteName()));

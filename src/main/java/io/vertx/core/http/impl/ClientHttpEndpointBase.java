@@ -13,30 +13,24 @@ package io.vertx.core.http.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.impl.ContextInternal;
-import io.vertx.core.net.impl.clientconnection.Endpoint;
+import io.vertx.core.net.impl.pool.Endpoint;
 import io.vertx.core.spi.metrics.ClientMetrics;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-abstract class ClientHttpEndpointBase extends Endpoint<HttpClientConnection> {
+abstract class ClientHttpEndpointBase<C> extends Endpoint<C> {
 
-  private final Object metric;
-  private final int port;
-  private final String host;
   private final ClientMetrics metrics; // Shall be removed later combining the PoolMetrics with HttpClientMetrics
 
-  ClientHttpEndpointBase(ClientMetrics metrics, int port, String host, Object metric, Runnable dispose) {
+  ClientHttpEndpointBase(ClientMetrics metrics, Runnable dispose) {
     super(dispose);
 
-    this.port = port;
-    this.host = host;
-    this.metric = metric;
     this.metrics = metrics;
   }
 
   @Override
-  public final void requestConnection(ContextInternal ctx, Handler<AsyncResult<HttpClientConnection>> handler) {
+  public final void requestConnection(ContextInternal ctx, long timeout, Handler<AsyncResult<C>> handler) {
     if (metrics != null) {
       Object metric;
       if (metrics != null) {
@@ -44,7 +38,7 @@ abstract class ClientHttpEndpointBase extends Endpoint<HttpClientConnection> {
       } else {
         metric = null;
       }
-      Handler<AsyncResult<HttpClientConnection>> next = handler;
+      Handler<AsyncResult<C>> next = handler;
       handler = ar -> {
         if (metrics != null) {
           metrics.dequeueRequest(metric);
@@ -52,20 +46,17 @@ abstract class ClientHttpEndpointBase extends Endpoint<HttpClientConnection> {
         next.handle(ar);
       };
     }
-    requestConnection2(ctx, handler);
+    requestConnection2(ctx, timeout, handler);
   }
 
-  protected abstract void requestConnection2(ContextInternal ctx, Handler<AsyncResult<HttpClientConnection>> handler);
+  protected abstract void requestConnection2(ContextInternal ctx, long timeout, Handler<AsyncResult<C>> handler);
+
+  abstract void checkExpired();
 
   @Override
   protected void dispose() {
     if (metrics != null) {
       metrics.close();
     }
-  }
-
-  @Override
-  public void close(HttpClientConnection connection) {
-    connection.close();
   }
 }

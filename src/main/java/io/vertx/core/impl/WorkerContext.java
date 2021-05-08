@@ -14,7 +14,6 @@ package io.vertx.core.impl;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
 import io.vertx.core.spi.metrics.PoolMetrics;
-import io.vertx.core.spi.tracing.VertxTracer;
 
 import java.util.Objects;
 import java.util.concurrent.RejectedExecutionException;
@@ -25,24 +24,17 @@ import java.util.concurrent.RejectedExecutionException;
 public class WorkerContext extends ContextImpl {
 
   WorkerContext(VertxInternal vertx,
-                VertxTracer<?, ?> tracer,
                 WorkerPool internalBlockingPool,
                 WorkerPool workerPool,
                 Deployment deployment,
-                CloseHooks closeHooks,
+                CloseFuture closeFuture,
                 ClassLoader tccl) {
-    super(vertx, tracer, vertx.getEventLoopGroup().next(), internalBlockingPool, workerPool, deployment, closeHooks, tccl);
+    super(vertx, vertx.getEventLoopGroup().next(), internalBlockingPool, workerPool, deployment, closeFuture, tccl);
   }
 
   @Override
   void runOnContext(AbstractContext ctx, Handler<Void> action) {
     try {
-      TaskQueue orderedTasks;
-      if (ctx instanceof DuplicatedContext) {
-        orderedTasks = ((DuplicatedContext)ctx).orderedTasks();
-      } else {
-        orderedTasks = this.orderedTasks;
-      }
       run(ctx, orderedTasks, null, action);
     } catch (RejectedExecutionException ignore) {
       // Pool is already shut down
@@ -57,23 +49,11 @@ public class WorkerContext extends ContextImpl {
    */
   @Override
   <T> void execute(AbstractContext ctx, T argument, Handler<T> task) {
-    TaskQueue orderedTasks;
-    if (ctx instanceof DuplicatedContext) {
-      orderedTasks = ((DuplicatedContext)ctx).orderedTasks();
-    } else {
-      orderedTasks = this.orderedTasks;
-    }
     execute(orderedTasks, argument, task);
   }
 
   @Override
   <T> void emit(AbstractContext ctx, T argument, Handler<T> task) {
-    TaskQueue orderedTasks;
-    if (ctx instanceof DuplicatedContext) {
-      orderedTasks = ((DuplicatedContext)ctx).orderedTasks();
-    } else {
-      orderedTasks = this.orderedTasks;
-    }
     execute(orderedTasks, argument, arg -> {
       ctx.dispatch(arg, task);
     });

@@ -12,10 +12,8 @@
 package io.vertx.core.http.impl;
 
 import io.netty.channel.group.ChannelGroup;
-import io.netty.channel.group.ChannelGroupFuture;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.vertx.core.Closeable;
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
@@ -23,7 +21,9 @@ import io.vertx.core.*;
 import io.vertx.core.http.*;
 import io.vertx.core.impl.CloseFuture;
 import io.vertx.core.impl.EventLoopContext;
-import io.vertx.core.net.impl.clientconnection.ConnectionManager;
+import io.vertx.core.net.NetClientOptions;
+import io.vertx.core.net.impl.NetClientImpl;
+import io.vertx.core.net.impl.pool.ConnectionManager;
 import io.vertx.core.impl.ContextInternal;
 import io.vertx.core.impl.future.PromiseInternal;
 import io.vertx.core.impl.VertxInternal;
@@ -32,8 +32,8 @@ import io.vertx.core.impl.logging.LoggerFactory;
 import io.vertx.core.net.ProxyOptions;
 import io.vertx.core.net.ProxyType;
 import io.vertx.core.net.SocketAddress;
-import io.vertx.core.net.impl.SSLHelper;
-import io.vertx.core.net.impl.clientconnection.Endpoint;
+import io.vertx.core.net.impl.pool.Endpoint;
+import io.vertx.core.net.impl.pool.Lease;
 import io.vertx.core.spi.metrics.ClientMetrics;
 import io.vertx.core.spi.metrics.HttpClientMetrics;
 import io.vertx.core.spi.metrics.Metrics;
@@ -50,6 +50,7 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  *
@@ -114,17 +115,16 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
   };
 
   private static final Logger log = LoggerFactory.getLogger(HttpClientImpl.class);
-  private static final Consumer<Endpoint<HttpClientConnection>> EXPIRED_CHECKER = endpoint -> ((ClientHttpStreamEndpoint)endpoint).checkExpired();
+  private static final Consumer<Endpoint<Lease<HttpClientConnection>>> EXPIRED_CHECKER = endpoint -> ((ClientHttpEndpointBase)endpoint).checkExpired();
 
 
   private final VertxInternal vertx;
   private final ChannelGroup channelGroup;
   private final HttpClientOptions options;
   private final ConnectionManager<EndpointKey, HttpClientConnection> webSocketCM;
-  private final ConnectionManager<EndpointKey, HttpClientConnection> httpCM;
+  private final ConnectionManager<EndpointKey, Lease<HttpClientConnection>> httpCM;
   private final ProxyType proxyType;
-  private final SSLHelper sslHelper;
-  private final SSLHelper webSocketSSLHelper;
+  private final NetClientImpl netClient;
   private final HttpClientMetrics metrics;
   private final boolean keepAlive;
   private final boolean pipelining;
@@ -152,13 +152,19 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     }
     this.keepAlive = options.isKeepAlive();
     this.pipelining = options.isPipelining();
-    this.sslHelper = new SSLHelper(options, options.getKeyCertOptions(), options.getTrustOptions()).
-        setApplicationProtocols(alpnVersions);
-    sslHelper.validate(vertx);
-    this.webSocketSSLHelper = new SSLHelper(sslHelper).setUseAlpn(false);
     if (!keepAlive && pipelining) {
       throw new IllegalStateException("Cannot have pipelining with no keep alive");
     }
+    this.netClient = new NetClientImpl(
+      vertx,
+      new NetClientOptions(options)
+        .setHostnameVerificationAlgorithm(options.isVerifyHost() ? "HTTPS": "")
+        .setProxyOptions(null)
+        .setApplicationLayerProtocols(alpnVersions
+          .stream()
+          .map(HttpVersion::alpnName)
+          .collect(Collectors.toList())),
+      closeFuture);
     webSocketCM = webSocketConnectionManager();
     httpCM = httpConnectionManager();
     proxyType = options.getProxyOptions() != null ? options.getProxyOptions().getType() : null;
@@ -166,6 +172,9 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
       PoolChecker checker = new PoolChecker(this);
       timerID = vertx.setTimer(options.getPoolCleanerPeriod(), checker);
     }
+
+    closeFuture.add(netClient);
+    closeFuture.add(this);
   }
 
   /**
@@ -197,40 +206,28 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     }
   }
 
-  private ConnectionManager<EndpointKey, HttpClientConnection> httpConnectionManager() {
-    long maxSize = options.getMaxPoolSize() * options.getHttp2MaxPoolSize();
+  private ConnectionManager<EndpointKey, Lease<HttpClientConnection>> httpConnectionManager() {
     int maxPoolSize = Math.max(options.getMaxPoolSize(), options.getHttp2MaxPoolSize());
     return new ConnectionManager<>((key, ctx, dispose) -> {
-      String host;
-      int port;
-      if (key.serverAddr.isInetSocket()) {
-        host = key.serverAddr.host();
-        port = key.serverAddr.port();
-      } else {
-        host = key.serverAddr.path();
-        port = 0;
-      }
       ClientMetrics metrics = this.metrics != null ? this.metrics.createEndpointMetrics(key.serverAddr, maxPoolSize) : null;
-      HttpChannelConnector connector = new HttpChannelConnector(this, channelGroup, ctx, metrics, options.getProtocolVersion(), key.ssl ? sslHelper : null, key.peerAddr, key.serverAddr);
-      return new ClientHttpStreamEndpoint(metrics, metrics, options.getMaxWaitQueueSize(), maxSize, host, port, ctx, connector, dispose);
+      HttpChannelConnector connector = new HttpChannelConnector(this, netClient, metrics, options.getProtocolVersion(), key.ssl, options.isUseAlpn(), key.peerAddr, key.serverAddr);
+      return new SharedClientHttpStreamEndpoint(
+        this,
+        metrics,
+        options.getMaxWaitQueueSize(),
+        options.getMaxPoolSize(),
+        options.getHttp2MaxPoolSize(),
+        connector,
+        dispose);
     });
   }
 
   private ConnectionManager<EndpointKey, HttpClientConnection> webSocketConnectionManager() {
     int maxPoolSize = options.getMaxWebSockets();
     return new ConnectionManager<>((key, ctx, dispose) -> {
-      String host;
-      int port;
-      if (key.serverAddr.isInetSocket()) {
-        host = key.serverAddr.host();
-        port = key.serverAddr.port();
-      } else {
-        host = key.serverAddr.path();
-        port = 0;
-      }
       ClientMetrics metrics = this.metrics != null ? this.metrics.createEndpointMetrics(key.serverAddr, maxPoolSize) : null;
-      HttpChannelConnector connector = new HttpChannelConnector(this, channelGroup, ctx, metrics, HttpVersion.HTTP_1_1, key.ssl ? webSocketSSLHelper : null, key.peerAddr, key.serverAddr);
-      return new WebSocketEndpoint(null, port, host, metrics, maxPoolSize, connector, dispose);
+      HttpChannelConnector connector = new HttpChannelConnector(this, netClient, metrics, HttpVersion.HTTP_1_1, key.ssl, false, key.peerAddr, key.serverAddr);
+      return new WebSocketEndpoint(null, maxPoolSize, connector, dispose);
     });
   }
 
@@ -262,6 +259,22 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     return metrics;
   }
 
+  /**
+   * Connect to a server.
+   */
+  public Future<HttpClientConnection> connect(SocketAddress server) {
+    return connect(server, null);
+  }
+
+  /**
+   * Connect to a server.
+   */
+  public Future<HttpClientConnection> connect(SocketAddress server, SocketAddress peer) {
+    EventLoopContext context = (EventLoopContext) vertx.getOrCreateContext();
+    HttpChannelConnector connector = new HttpChannelConnector(this, netClient, null, options.getProtocolVersion(), options.isSsl(), options.isUseAlpn(), peer, server);
+    return connector.httpConnect(context);
+  }
+
   @Override
   public void webSocket(WebSocketConnectOptions connectOptions, Handler<AsyncResult<WebSocket>> handler) {
     webSocket(connectOptions, vertx.promise(handler));
@@ -277,7 +290,7 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     if (ctx instanceof EventLoopContext) {
       eventLoopContext = (EventLoopContext) ctx;
     } else {
-      eventLoopContext = (EventLoopContext) vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
+      eventLoopContext = vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
     }
     webSocketCM.getConnection(
       eventLoopContext,
@@ -445,31 +458,20 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     }
     webSocketCM.close();
     httpCM.close();
-    ChannelGroupFuture fut = channelGroup.close();
     if (metrics != null) {
-      PromiseInternal<Void> p = (PromiseInternal) Promise.promise();
-      fut.addListener(p);
-      p.future().<Void>compose(v -> {
-        metrics.close();
-        return Future.succeededFuture();
-      }).onComplete(completion);
-    } else {
-      fut.addListener((PromiseInternal)completion);
+      metrics.close();
     }
+    completion.complete();
   }
 
   @Override
   public void close(Handler<AsyncResult<Void>> handler) {
-    ContextInternal closingCtx = vertx.getOrCreateContext();
-    closeFuture.close(handler != null ? closingCtx.promise(handler) : null);
+    netClient.close(handler);
   }
 
   @Override
   public Future<Void> close() {
-    ContextInternal closingCtx = vertx.getOrCreateContext();
-    PromiseInternal<Void> promise = closingCtx.promise();
-    closeFuture.close(promise);
-    return promise.future();
+    return netClient.close();
   }
 
   @Override
@@ -515,10 +517,6 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
    */
   public VertxInternal getVertx() {
     return vertx;
-  }
-
-  SSLHelper getSslHelper() {
-    return sslHelper;
   }
 
   private void request(HttpMethod method,
@@ -584,26 +582,22 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
     PromiseInternal<HttpClientRequest> requestPromise) {
     ContextInternal ctx = requestPromise.context();
     EndpointKey key = new EndpointKey(useSSL, server, peerAddress);
-    long timerID;
-    if (timeout > 0L) {
-      timerID = ctx.setTimer(timeout, id -> {
-        requestPromise.tryFail(HttpClientRequestBase.timeoutEx(timeout, method, server, requestURI));
-      });
-    } else {
-      timerID = -1L;
-    }
     EventLoopContext eventLoopContext;
     if (ctx instanceof EventLoopContext) {
       eventLoopContext = (EventLoopContext) ctx;
     } else {
-      eventLoopContext = (EventLoopContext) vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
+      eventLoopContext = vertx.createEventLoopContext(ctx.nettyEventLoop(), ctx.workerPool(), ctx.classLoader());
     }
-    httpCM.getConnection(eventLoopContext, key, ar1 -> {
+    httpCM.getConnection(eventLoopContext, key, timeout, ar1 -> {
       if (ar1.succeeded()) {
-        HttpClientConnection conn = ar1.result();
+        Lease<HttpClientConnection> lease = ar1.result();
+        HttpClientConnection conn = lease.get();
         conn.createStream(ctx, ar2 -> {
           if (ar2.succeeded()) {
             HttpClientStream stream = ar2.result();
+            stream.closeHandler(v -> {
+              lease.recycle();
+            });
             HttpClientRequestImpl req = new HttpClientRequestImpl(this, stream, ctx.promise(), useSSL, method, server, host, port, requestURI);
             if (headers != null) {
               req.headers().setAll(headers);
@@ -611,11 +605,8 @@ public class HttpClientImpl implements HttpClient, MetricsProvider, Closeable {
             if (followRedirects != null) {
               req.setFollowRedirects(followRedirects);
             }
-            if (timerID >= 0L) {
-              if (!vertx.cancelTimer(timerID)) {
-                req.reset(0);
-                return;
-              }
+            if (timeout > 0L) {
+              // Maybe later ?
               req.setTimeout(timeout);
             }
             requestPromise.complete(req);

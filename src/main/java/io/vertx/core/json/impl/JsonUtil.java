@@ -17,8 +17,12 @@ import io.vertx.core.shareddata.Shareable;
 
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import static java.time.format.DateTimeFormatter.ISO_INSTANT;
 
@@ -81,8 +85,12 @@ public final class JsonUtil {
     return val;
   }
 
+  public static final Function<Object, ?> DEFAULT_CLONER = o -> {
+    throw new IllegalStateException("Illegal type in Json: " + o.getClass());
+  };
+
   @SuppressWarnings("unchecked")
-  public static Object checkAndCopy(Object val) {
+  public static Object deepCopy(Object val, Function<Object, ?> copier) {
     if (val == null) {
       // OK
     } else if (val instanceof Number) {
@@ -101,9 +109,9 @@ public final class JsonUtil {
       // JsonObject, JsonArray or any user defined type that can shared across the cluster
       val = ((Shareable) val).copy();
     } else if (val instanceof Map) {
-      val = (new JsonObject((Map) val)).copy();
+      val = (new JsonObject((Map) val)).copy(copier);
     } else if (val instanceof List) {
-      val = (new JsonArray((List) val)).copy();
+      val = (new JsonArray((List) val)).copy(copier);
     } else if (val instanceof Buffer) {
       val = ((Buffer) val).copy();
     } else if (val instanceof byte[]) {
@@ -113,8 +121,13 @@ public final class JsonUtil {
     } else if (val instanceof Enum) {
       // OK
     } else {
-      throw new IllegalStateException("Illegal type in Json: " + val.getClass());
+      val = copier.apply(val);
     }
     return val;
+  }
+
+  public static <T> Stream<T> asStream(Iterator<T> sourceIterator) {
+    Iterable<T> iterable = () -> sourceIterator;
+    return StreamSupport.stream(iterable.spliterator(), false);
   }
 }

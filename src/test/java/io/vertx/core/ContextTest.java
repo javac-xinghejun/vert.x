@@ -20,11 +20,16 @@ import org.junit.Test;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -34,7 +39,7 @@ public class ContextTest extends VertxTestBase {
   private ExecutorService workerExecutor;
 
   private ContextInternal createWorkerContext() {
-    return ((VertxInternal) vertx).createWorkerContext(null, null, new WorkerPool(workerExecutor, null), Thread.currentThread().getContextClassLoader());
+    return ((VertxInternal) vertx).createWorkerContext(null, new CloseFuture(), new WorkerPool(workerExecutor, null), Thread.currentThread().getContextClassLoader());
   }
 
   @Override
@@ -514,28 +519,36 @@ public class ContextTest extends VertxTestBase {
 
   @Test
   public void testDuplicateWorkerConcurrency() throws Exception {
-    ContextInternal ctx = createWorkerContext();
-    ContextInternal dup1 = ctx.duplicate();
-    ContextInternal dup2 = ctx.duplicate();
-    CyclicBarrier barrier = new CyclicBarrier(3);
-    dup1.runOnContext(v -> {
-      assertTrue(Context.isOnWorkerThread());
-      try {
-        barrier.await(10, TimeUnit.SECONDS);
-      } catch (Exception e) {
-        fail(e);
-      }
-    });
-    dup2.runOnContext(v -> {
-      assertTrue(Context.isOnWorkerThread());
-      try {
-        barrier.await(10, TimeUnit.SECONDS);
-      } catch (Exception e) {
-        fail(e);
-      }
-    });
-    barrier.await(10, TimeUnit.SECONDS);
+    testDuplicateWorkerConcurrency((ctx, task) -> ctx.runOnContext(v -> task.run()));
+    testDuplicateWorkerConcurrency((ctx, task) -> ctx.execute(v -> task.run()));
+    testDuplicateWorkerConcurrency((ctx, task) -> ctx.execute(null, v -> task.run()));
+    testDuplicateWorkerConcurrency(ContextInternal::execute);
+    testDuplicateWorkerConcurrency((ctx, task) -> ctx.emit(v -> task.run()));
+    testDuplicateWorkerConcurrency((ctx, task) -> ctx.emit(null, v -> task.run()));
   }
+
+  private void testDuplicateWorkerConcurrency(BiConsumer<ContextInternal, Runnable> task) throws Exception {
+    ContextInternal worker = ((VertxInternal)vertx).createWorkerContext();
+    ContextInternal[] contexts = new ContextInternal[] { worker.duplicate(), worker.duplicate()};
+    waitFor(contexts.length);
+    AtomicBoolean owner = new AtomicBoolean();
+    CountDownLatch latch = new CountDownLatch(contexts.length);
+    for (ContextInternal context : contexts) {
+      task.accept(context, () -> {
+        try {
+          assertTrue(owner.compareAndSet(false, true));
+          Thread.sleep(200);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        } finally {
+          owner.set(false);
+        }
+        latch.countDown();
+      });
+    }
+    awaitLatch(latch);
+  }
+
 
   @Test
   public void testDuplicateEventLoopExecuteBlocking() throws Exception {
@@ -865,7 +878,7 @@ public class ContextTest extends VertxTestBase {
   public void testFailedFutureContextPropagation2() {
     ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
     Future<String> future = context.failedFuture("error");
-    future = future.recover(πerr -> {
+    future = future.recover(err -> {
       assertSame(context, Vertx.currentContext());
       return Future.succeededFuture("value-2");
     });
@@ -880,5 +893,40 @@ public class ContextTest extends VertxTestBase {
   public void testSticky() {
     Context ctx = vertx.getOrCreateContext();
     assertSame(ctx, vertx.getOrCreateContext());
+  }
+
+  @Test
+  public void testUnwrapPromiseWithoutContext() {
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    List<Function<Promise<Object>, PromiseInternal<Object>>> suppliers = new ArrayList<>();
+    suppliers.add(ctx::promise);
+    suppliers.add(((VertxInternal)vertx)::promise);
+    for (Function<Promise<Object>, PromiseInternal<Object>> supplier : suppliers) {
+      Promise<Object> p1 = Promise.promise();
+      PromiseInternal<Object> p2 = supplier.apply(p1);
+      assertNotSame(p1, p2);
+      assertSame(ctx, p2.context());
+      Object result = new Object();
+      p2.complete(result);
+      assertWaitUntil(() -> p1.future().isComplete());
+      assertSame(result, p1.future().result());
+    }
+  }
+
+  @Test
+  public void testTopLevelContextClassLoader() {
+    ClassLoader cl = new URLClassLoader(new URL[0]);
+    ContextInternal ctx = (ContextInternal) vertx.getOrCreateContext();
+    EventLoop el = ctx.nettyEventLoop();
+    el.execute(() -> {
+      Thread.currentThread().setContextClassLoader(cl);
+      ctx.runOnContext(v -> {
+        el.execute(() -> {
+          assertSame(cl, Thread.currentThread().getContextClassLoader());
+          testComplete();
+        });
+      });
+    });
+    await();
   }
 }

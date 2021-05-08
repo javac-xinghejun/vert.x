@@ -56,10 +56,9 @@ abstract class ContextImpl extends AbstractContext {
   static final boolean DISABLE_TIMINGS = Boolean.getBoolean(DISABLE_TIMINGS_PROP_NAME);
 
   protected final VertxInternal owner;
-  protected final VertxTracer<?, ?> tracer;
   protected final JsonObject config;
   private final Deployment deployment;
-  private final CloseHooks closeHooks;
+  private final CloseFuture closeFuture;
   private final ClassLoader tccl;
   private final EventLoop eventLoop;
   private ConcurrentMap<Object, Object> data;
@@ -71,24 +70,22 @@ abstract class ContextImpl extends AbstractContext {
   final TaskQueue orderedTasks;
 
   ContextImpl(VertxInternal vertx,
-              VertxTracer<?, ?> tracer,
               EventLoop eventLoop,
               WorkerPool internalBlockingPool,
               WorkerPool workerPool,
               Deployment deployment,
-              CloseHooks closeHooks,
+              CloseFuture closeFuture,
               ClassLoader tccl) {
     if (VertxThread.DISABLE_TCCL && tccl != ClassLoader.getSystemClassLoader()) {
       log.warn("You have disabled TCCL checks but you have a custom TCCL to set.");
     }
-    this.tracer = tracer;
     this.deployment = deployment;
     this.config = deployment != null ? deployment.config() : new JsonObject();
     this.eventLoop = eventLoop;
     this.tccl = tccl;
     this.owner = vertx;
     this.workerPool = workerPool;
-    this.closeHooks = closeHooks;
+    this.closeFuture = closeFuture;
     this.internalBlockingPool = internalBlockingPool;
     this.orderedTasks = new TaskQueue();
     this.internalOrderedTasks = new TaskQueue();
@@ -99,29 +96,13 @@ abstract class ContextImpl extends AbstractContext {
   }
 
   @Override
-  public CloseHooks closeHooks() {
-    return closeHooks;
-  }
-
-  public void addCloseHook(Closeable hook) {
-    if (closeHooks != null) {
-      closeHooks.add(hook);
-    } else {
-      owner.addCloseHook(hook);
-    }
+  public CloseFuture closeFuture() {
+    return closeFuture;
   }
 
   @Override
   public boolean isDeployment() {
     return deployment != null;
-  }
-
-  public void removeCloseHook(Closeable hook) {
-    if (deployment != null) {
-      closeHooks.remove(hook);
-    } else {
-      owner.removeCloseHook(hook);
-    }
   }
 
   @Override
@@ -203,7 +184,7 @@ abstract class ContextImpl extends AbstractContext {
 
   @Override
   public VertxTracer tracer() {
-    return tracer;
+    return owner.tracer();
   }
 
   @Override

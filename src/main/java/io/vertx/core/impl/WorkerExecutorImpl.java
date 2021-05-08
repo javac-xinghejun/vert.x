@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 Contributors to the Eclipse Foundation
+ * Copyright (c) 2011-2021 Contributors to the Eclipse Foundation
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
@@ -24,13 +24,13 @@ import io.vertx.core.spi.metrics.PoolMetrics;
 class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
 
   private final VertxInternal vertx;
-  private final CloseHooks closeHooks;
+  private final CloseFuture closeFuture;
   private final VertxImpl.SharedWorkerPool pool;
   private boolean closed;
 
-  public WorkerExecutorImpl(VertxInternal vertx, CloseHooks closeHooks, VertxImpl.SharedWorkerPool pool) {
+  public WorkerExecutorImpl(VertxInternal vertx, CloseFuture closeFuture, VertxImpl.SharedWorkerPool pool) {
     this.vertx = vertx;
-    this.closeHooks = closeHooks;
+    this.closeFuture = closeFuture;
     this.pool = pool;
   }
 
@@ -89,8 +89,8 @@ class WorkerExecutorImpl implements MetricsProvider, WorkerExecutorInternal {
     synchronized (this) {
       if (!closed) {
         closed = true;
-        closeHooks.remove(this);
-        pool.release();
+        closeFuture.remove(this);
+        pool.close();
       }
     }
     completion.complete();

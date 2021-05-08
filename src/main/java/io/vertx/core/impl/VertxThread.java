@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * @author <a href="mailto:nmaurer@redhat.com">Norman Maurer</a>
  */
-public final class VertxThread extends FastThreadLocalThread implements BlockedThreadChecker.Task {
+public class VertxThread extends FastThreadLocalThread implements BlockedThreadChecker.Task {
 
   static final String DISABLE_TCCL_PROP_NAME = "vertx.disableTCCL";
   static final boolean DISABLE_TCCL = Boolean.getBoolean(DISABLE_TCCL_PROP_NAME);
@@ -28,6 +28,7 @@ public final class VertxThread extends FastThreadLocalThread implements BlockedT
   private final TimeUnit maxExecTimeUnit;
   private long execStart;
   private ContextInternal context;
+  private ClassLoader topLevelTCCL;
 
   public VertxThread(Runnable target, String name, boolean worker, long maxExecTime, TimeUnit maxExecTimeUnit) {
     super(target, name);
@@ -87,6 +88,9 @@ public final class VertxThread extends FastThreadLocalThread implements BlockedT
       executeStart();
     }
     ContextInternal prev = this.context;
+    if (prev == null) {
+      topLevelTCCL = Thread.currentThread().getContextClassLoader();
+    }
     this.context = context;
     return prev;
   }
@@ -100,9 +104,11 @@ public final class VertxThread extends FastThreadLocalThread implements BlockedT
    * @param prev the previous context thread to restore, might be {@code null}
    */
   void endEmission(ContextInternal prev) {
-    // We don't unset the context after execution - this is done later when the context is closed via
-    // VertxThreadFactory
     context = prev;
+    if (prev == null) {
+      Thread.currentThread().setContextClassLoader(topLevelTCCL);
+      topLevelTCCL = null;
+    }
     if (!ContextImpl.DISABLE_TIMINGS) {
       executeEnd();
     }
